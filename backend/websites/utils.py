@@ -383,13 +383,33 @@ if ( !defined('ABSPATH') )
 
 require_once ABSPATH . 'wp-settings.php';
 """
-        with open(wp_config_path, 'w') as f:
-            f.write(wp_config_content)
+        # Write to temporary file first, then copy with sudo to avoid permission issues
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.php') as tmp_file:
+            tmp_file.write(wp_config_content)
+            tmp_file_path = tmp_file.name
         
-        run_command(['chown', 'www-data:www-data', wp_config_path], sudo=True)
-        run_command(['chmod', '600', wp_config_path], sudo=True)
-        
-        return {'success': True}
+        try:
+            # Copy temp file to destination with sudo
+            exit_code, stdout, stderr = run_command([
+                'cp', tmp_file_path, wp_config_path
+            ], sudo=True)
+            
+            if exit_code != 0:
+                return {'success': False, 'error': f'Failed to create wp-config.php: {stderr}'}
+            
+            # Set proper permissions and ownership
+            owner_username = website.user.username if website.user else 'www-data'
+            run_command(['chown', f'{owner_username}:www-data', wp_config_path], sudo=True)
+            run_command(['chmod', '644', wp_config_path], sudo=True)
+            
+            return {'success': True}
+        finally:
+            # Clean up temp file
+            try:
+                os.unlink(tmp_file_path)
+            except:
+                pass
     except Exception as e:
         logger.error(f"Error creating wp-config.php: {e}")
         return {'success': False, 'error': str(e)}

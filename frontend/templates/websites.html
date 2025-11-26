@@ -74,8 +74,9 @@
                            x-model="newWebsite.domain" 
                            @input="validateDomain()"
                            placeholder="example.com"
+                           :disabled="isSubmitting"
                            required
-                           class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all">
+                           class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all disabled:opacity-50 disabled:cursor-not-allowed">
                     <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
                         <span x-show="!domainError" class="flex items-center space-x-1">
                             <svg class="w-4 h-4 text-green-500" fill="currentColor" viewBox="0 0 20 20">
@@ -101,8 +102,9 @@
                         <span>Website Type</span>
                     </label>
                     <select x-model="newWebsite.type" 
+                            :disabled="isSubmitting"
                             required
-                            class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all">
+                            class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all disabled:opacity-50 disabled:cursor-not-allowed">
                         <option value="php">PHP Application</option>
                         <option value="wordpress">WordPress Site</option>
                     </select>
@@ -136,8 +138,9 @@
                         <input type="email" 
                                x-model="newWebsite.wp_email" 
                                placeholder="admin@example.com"
-                               required
-                               class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all">
+                               :disabled="isSubmitting"
+                               :required="newWebsite.type === 'wordpress'"
+                               class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all disabled:opacity-50 disabled:cursor-not-allowed">
                     </div>
                     
                     <!-- WordPress Admin Username -->
@@ -151,8 +154,9 @@
                         <input type="text" 
                                x-model="newWebsite.wp_username" 
                                placeholder="admin"
-                               required
-                               class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all">
+                               :disabled="isSubmitting"
+                               :required="newWebsite.type === 'wordpress'"
+                               class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all disabled:opacity-50 disabled:cursor-not-allowed">
                     </div>
                     
                     <!-- WordPress Admin Password -->
@@ -166,8 +170,9 @@
                         <input type="password" 
                                x-model="newWebsite.wp_password" 
                                placeholder="Enter a strong password"
-                               required
-                               class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all">
+                               :disabled="isSubmitting"
+                               :required="newWebsite.type === 'wordpress'"
+                               class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all disabled:opacity-50 disabled:cursor-not-allowed">
                         <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
                             Use a strong password for your WordPress admin account
                         </p>
@@ -183,8 +188,9 @@
                         <span>PHP Version</span>
                     </label>
                     <select x-model="newWebsite.php_version" 
+                            :disabled="isSubmitting"
                             required
-                            class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all">
+                            class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all disabled:opacity-50 disabled:cursor-not-allowed">
                         <option value="8.1">PHP 8.1</option>
                         <option value="8.2">PHP 8.2</option>
                         <option value="8.3">PHP 8.3</option>
@@ -209,17 +215,22 @@
                 <!-- Action Buttons -->
                 <div class="flex justify-end space-x-3 pt-4">
                     <button type="button" 
-                            @click="showAddForm = false" 
-                            class="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
+                            @click="showAddForm = false; errorMessage = ''; domainError = ''; isSubmitting = false;" 
+                            :disabled="isSubmitting"
+                            class="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
                         Cancel
                     </button>
                     <button type="submit" 
-                            :disabled="domainError || (newWebsite.type === 'wordpress' && (!newWebsite.wp_email || !newWebsite.wp_username || !newWebsite.wp_password))"
-                            class="px-6 py-2 bg-primary-600 hover:bg-primary-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white rounded-lg transition-colors flex items-center space-x-2">
-                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            :disabled="isSubmitting || domainError || (newWebsite.type === 'wordpress' && (!newWebsite.wp_email || !newWebsite.wp_username || !newWebsite.wp_password))"
+                            class="px-6 py-2 bg-primary-600 hover:bg-primary-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white rounded-lg transition-colors flex items-center justify-center space-x-2 min-w-[140px]">
+                        <svg x-show="isSubmitting" class="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        <svg x-show="!isSubmitting" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
                         </svg>
-                        <span>Create Website</span>
+                        <span x-text="isSubmitting ? 'Creating...' : 'Create Website'"></span>
                     </button>
                 </div>
             </form>
@@ -274,6 +285,7 @@ function websites() {
         showAddForm: false,
         domainError: '',
         errorMessage: '',
+        isSubmitting: false,
         newWebsite: {
             domain: '',
             type: 'php',
@@ -339,6 +351,9 @@ function websites() {
                 }
             }
             
+            // Set submitting state - this will disable all fields
+            this.isSubmitting = true;
+            
             // Always use nginx (as reverse proxy to apache)
             const websiteData = {
                 domain: this.newWebsite.domain.trim(),
@@ -354,12 +369,6 @@ function websites() {
                 websiteData.wp_password = this.newWebsite.wp_password;
             }
             
-            // Show loading state
-            const submitButton = event.target.querySelector('button[type="submit"]');
-            const originalText = submitButton.innerHTML;
-            submitButton.disabled = true;
-            submitButton.innerHTML = '<svg class="animate-spin h-5 w-5 mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>Creating...';
-            
             fetch('/api/websites/', {
                 method: 'POST',
                 headers: {
@@ -370,8 +379,7 @@ function websites() {
             })
             .then(response => response.json())
             .then(data => {
-                submitButton.disabled = false;
-                submitButton.innerHTML = originalText;
+                this.isSubmitting = false;
                 
                 if (data.id) {
                     this.loadWebsites();
@@ -404,8 +412,7 @@ function websites() {
                 }
             })
             .catch(error => {
-                submitButton.disabled = false;
-                submitButton.innerHTML = originalText;
+                this.isSubmitting = false;
                 console.error('Error creating website:', error);
                 this.errorMessage = 'Network error: Failed to create website. Please try again.';
             });

@@ -251,24 +251,55 @@ def create_wordpress_site(website: Website, wp_email: str, wp_username: str, wp_
 
 
 def create_mysql_database(db_name: str, db_user: str, db_password: str) -> Dict[str, any]:
-    """Create MySQL database and user."""
+    """Create MySQL database and user (compatible with MySQL 5.7+ and 8.0+)."""
     try:
+        import shlex
+        
         # Create database
         exit_code, stdout, stderr = run_command([
-            'mysql', '-e', f'CREATE DATABASE IF NOT EXISTS {db_name};'
+            'mysql', '-e', f'CREATE DATABASE IF NOT EXISTS `{db_name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;'
         ], sudo=True)
         
         if exit_code != 0:
             return {'success': False, 'error': f'Failed to create database: {stderr}'}
         
-        # Create user and grant privileges
-        grant_sql = f"GRANT ALL PRIVILEGES ON {db_name}.* TO '{db_user}'@'localhost' IDENTIFIED BY '{db_password}'; FLUSH PRIVILEGES;"
+        # Check if user exists, drop if exists (for idempotency)
+        exit_code, stdout, stderr = run_command([
+            'mysql', '-e', f"DROP USER IF EXISTS '{db_user}'@'localhost';"
+        ], sudo=True)
+        # Ignore errors for DROP USER IF EXISTS
+        
+        # Create user (MySQL 8.0+ compatible syntax)
+        create_user_sql = f"CREATE USER IF NOT EXISTS '{db_user}'@'localhost' IDENTIFIED BY '{db_password}';"
+        exit_code, stdout, stderr = run_command([
+            'mysql', '-e', create_user_sql
+        ], sudo=True)
+        
+        if exit_code != 0:
+            # Try older syntax for MySQL 5.7
+            create_user_sql_old = f"CREATE USER '{db_user}'@'localhost' IDENTIFIED BY '{db_password}';"
+            exit_code, stdout, stderr = run_command([
+                'mysql', '-e', create_user_sql_old
+            ], sudo=True)
+            if exit_code != 0:
+                return {'success': False, 'error': f'Failed to create database user: {stderr}'}
+        
+        # Grant privileges
+        grant_sql = f"GRANT ALL PRIVILEGES ON `{db_name}`.* TO '{db_user}'@'localhost';"
         exit_code, stdout, stderr = run_command([
             'mysql', '-e', grant_sql
         ], sudo=True)
         
         if exit_code != 0:
-            return {'success': False, 'error': f'Failed to create database user: {stderr}'}
+            return {'success': False, 'error': f'Failed to grant privileges: {stderr}'}
+        
+        # Flush privileges
+        exit_code, stdout, stderr = run_command([
+            'mysql', '-e', 'FLUSH PRIVILEGES;'
+        ], sudo=True)
+        
+        if exit_code != 0:
+            logger.warning(f"Failed to flush privileges: {stderr}, but continuing")
         
         return {'success': True}
     except Exception as e:

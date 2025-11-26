@@ -1,0 +1,58 @@
+"""
+Main views for SkyDock Panel frontend.
+"""
+from django.shortcuts import render, redirect
+from django.contrib.auth.decorators import login_required
+from django.contrib.auth import login, logout
+from django.contrib import messages
+
+
+def login_view(request):
+    """Login page view."""
+    if request.user.is_authenticated:
+        return redirect('dashboard')
+    
+    if request.method == 'POST':
+        from django.contrib.auth import authenticate
+        email = request.POST.get('email')
+        password = request.POST.get('password')
+        
+        user = authenticate(request, username=email, password=password)
+        if user is not None:
+            login(request, user)
+            return redirect('dashboard')
+        else:
+            messages.error(request, 'Invalid email or password.')
+    
+    return render(request, 'login.html')
+
+
+def logout_page(request):
+    """Logout page view."""
+    logout(request)
+    return redirect('login')
+
+
+@login_required
+def dashboard(request):
+    """Dashboard page."""
+    return render(request, 'dashboard.html')
+
+
+@login_required
+def services(request):
+    """Services page."""
+    return render(request, 'services.html')
+
+
+@login_required
+def websites(request):
+    """Websites page."""
+    return render(request, 'websites.html')
+
+
+@login_required
+def settings(request):
+    """Settings page."""
+    return render(request, 'settings.html')
+

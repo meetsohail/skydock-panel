@@ -1,0 +1,24 @@
+[Unit]
+Description=SkyDock Panel - VPS Management Panel
+After=network.target mysql.service
+
+[Service]
+Type=notify
+User=skydock
+Group=skydock
+WorkingDirectory=/opt/skydock-panel/backend
+Environment="PATH=/opt/skydock-panel/backend/venv/bin"
+EnvironmentFile=/opt/skydock-panel/backend/.env
+ExecStart=/opt/skydock-panel/backend/venv/bin/gunicorn \
+    --bind 127.0.0.1:8080 \
+    --workers 3 \
+    --timeout 120 \
+    --access-logfile /opt/skydock-panel/logs/access.log \
+    --error-logfile /opt/skydock-panel/logs/error.log \
+    skydock_backend.wsgi:application
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+

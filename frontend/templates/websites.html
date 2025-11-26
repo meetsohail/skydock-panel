@@ -1,0 +1,208 @@
+{% extends "base.html" %}
+
+{% block title %}Websites - SkyDock Panel{% endblock %}
+{% block page_title %}Websites{% endblock %}
+
+{% block content %}
+<div x-data="websites()" x-init="loadWebsites()" class="space-y-6">
+    <div class="flex justify-between items-center">
+        <h3 class="text-lg font-semibold text-gray-900 dark:text-white">Your Websites</h3>
+        <button @click="showAddForm = true" class="bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-lg">
+            Add Website
+        </button>
+    </div>
+
+    <!-- Add Website Modal -->
+    <div x-show="showAddForm" @click.away="showAddForm = false" x-cloak 
+         class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+        <div class="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white dark:bg-gray-800">
+            <h3 class="text-lg font-bold text-gray-900 dark:text-white mb-4">Add New Website</h3>
+            <form @submit.prevent="addWebsite()">
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Domain</label>
+                    <input type="text" x-model="newWebsite.domain" required
+                           class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white">
+                </div>
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Type</label>
+                    <select x-model="newWebsite.type" required
+                            class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white">
+                        <option value="php">PHP Application</option>
+                        <option value="wordpress">WordPress Site</option>
+                    </select>
+                </div>
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Web Server</label>
+                    <select x-model="newWebsite.web_server" required
+                            class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white">
+                        <option value="nginx">Nginx</option>
+                        <option value="apache">Apache</option>
+                    </select>
+                </div>
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">PHP Version</label>
+                    <select x-model="newWebsite.php_version" required
+                            class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white">
+                        <option value="8.1">PHP 8.1</option>
+                        <option value="8.2">PHP 8.2</option>
+                        <option value="8.3">PHP 8.3</option>
+                    </select>
+                </div>
+                <div class="flex justify-end space-x-2">
+                    <button type="button" @click="showAddForm = false" 
+                            class="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700">
+                        Cancel
+                    </button>
+                    <button type="submit" 
+                            class="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-md">
+                        Create
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Websites Table -->
+    <div class="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden">
+        <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+            <thead class="bg-gray-50 dark:bg-gray-700">
+                <tr>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Domain</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Type</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Web Server</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Status</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Actions</th>
+                </tr>
+            </thead>
+            <tbody class="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
+                <template x-for="website in websites" :key="website.id">
+                    <tr>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-white" x-text="website.domain"></td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400" x-text="website.type"></td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400" x-text="website.web_server"></td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <span x-show="website.status === 'active'" class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
+                                Active
+                            </span>
+                            <span x-show="website.status !== 'active'" class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200">
+                                Disabled
+                            </span>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                            <button @click="toggleStatus(website.id)" 
+                                    class="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300 mr-3">
+                                <span x-text="website.status === 'active' ? 'Disable' : 'Enable'"></span>
+                            </button>
+                            <button @click="deleteWebsite(website.id)" 
+                                    class="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300">
+                                Delete
+                            </button>
+                        </td>
+                    </tr>
+                </template>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+function websites() {
+    return {
+        websites: [],
+        showAddForm: false,
+        newWebsite: {
+            domain: '',
+            type: 'php',
+            web_server: 'nginx',
+            php_version: '8.1'
+        },
+        loadWebsites() {
+            fetch('/api/websites/')
+                .then(response => response.json())
+                .then(data => {
+                    this.websites = data;
+                })
+                .catch(error => {
+                    console.error('Error loading websites:', error);
+                });
+        },
+        addWebsite() {
+            fetch('/api/websites/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': this.getCookie('csrftoken')
+                },
+                body: JSON.stringify(this.newWebsite)
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.id) {
+                    this.loadWebsites();
+                    this.showAddForm = false;
+                    this.newWebsite = { domain: '', type: 'php', web_server: 'nginx', php_version: '8.1' };
+                    alert('Website created successfully!');
+                } else {
+                    alert('Error: ' + (data.error || 'Failed to create website'));
+                }
+            })
+            .catch(error => {
+                console.error('Error creating website:', error);
+                alert('Error creating website');
+            });
+        },
+        toggleStatus(websiteId) {
+            fetch(`/api/websites/${websiteId}/toggle-status/`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': this.getCookie('csrftoken')
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                this.loadWebsites();
+                alert(data.message);
+            })
+            .catch(error => {
+                console.error('Error toggling status:', error);
+            });
+        },
+        deleteWebsite(websiteId) {
+            if (!confirm('Are you sure you want to delete this website?')) {
+                return;
+            }
+            fetch(`/api/websites/${websiteId}/`, {
+                method: 'DELETE',
+                headers: {
+                    'X-CSRFToken': this.getCookie('csrftoken')
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                this.loadWebsites();
+                alert('Website deleted successfully');
+            })
+            .catch(error => {
+                console.error('Error deleting website:', error);
+            });
+        },
+        getCookie(name) {
+            let cookieValue = null;
+            if (document.cookie && document.cookie !== '') {
+                const cookies = document.cookie.split(';');
+                for (let i = 0; i < cookies.length; i++) {
+                    const cookie = cookies[i].trim();
+                    if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                        cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                        break;
+                    }
+                    }
+                }
+            return cookieValue;
+        }
+    }
+}
+</script>
+{% endblock %}
+

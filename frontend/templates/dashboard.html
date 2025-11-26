@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - SkyDock Panel{% endblock %}
+{% block page_title %}Dashboard{% endblock %}
+
+{% block content %}
+<div x-data="dashboard()" x-init="loadMetrics()" class="space-y-6">
+    <!-- Server Metrics Cards -->
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <!-- CPU Usage -->
+        <div class="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="text-sm font-medium text-gray-600 dark:text-gray-400">CPU Usage</p>
+                    <p class="text-2xl font-bold text-gray-900 dark:text-white" x-text="metrics.cpu ? metrics.cpu.percent.toFixed(1) + '%' : 'Loading...'"></p>
+                </div>
+                <div class="w-12 h-12 bg-primary-100 dark:bg-primary-900 rounded-full flex items-center justify-center">
+                    <svg class="w-6 h-6 text-primary-600 dark:text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"></path>
+                    </svg>
+                </div>
+            </div>
+        </div>
+
+        <!-- Memory Usage -->
+        <div class="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="text-sm font-medium text-gray-600 dark:text-gray-400">Memory Usage</p>
+                    <p class="text-2xl font-bold text-gray-900 dark:text-white" x-text="metrics.memory ? metrics.memory.percent.toFixed(1) + '%' : 'Loading...'"></p>
+                </div>
+                <div class="w-12 h-12 bg-green-100 dark:bg-green-900 rounded-full flex items-center justify-center">
+                    <svg class="w-6 h-6 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4"></path>
+                    </svg>
+                </div>
+            </div>
+        </div>
+
+        <!-- Disk Usage -->
+        <div class="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="text-sm font-medium text-gray-600 dark:text-gray-400">Disk Usage</p>
+                    <p class="text-2xl font-bold text-gray-900 dark:text-white" x-text="metrics.disk ? metrics.disk.percent.toFixed(1) + '%' : 'Loading...'"></p>
+                </div>
+                <div class="w-12 h-12 bg-yellow-100 dark:bg-yellow-900 rounded-full flex items-center justify-center">
+                    <svg class="w-6 h-6 text-yellow-600 dark:text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4"></path>
+                    </svg>
+                </div>
+            </div>
+        </div>
+
+        <!-- Uptime -->
+        <div class="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="text-sm font-medium text-gray-600 dark:text-gray-400">Uptime</p>
+                    <p class="text-2xl font-bold text-gray-900 dark:text-white" x-text="metrics.uptime ? metrics.uptime.days + 'd' : 'Loading...'"></p>
+                </div>
+                <div class="w-12 h-12 bg-purple-100 dark:bg-purple-900 rounded-full flex items-center justify-center">
+                    <svg class="w-6 h-6 text-purple-600 dark:text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    </svg>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- System Information -->
+    <div class="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
+        <h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">System Information</h3>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+                <p class="text-sm text-gray-600 dark:text-gray-400">Hostname</p>
+                <p class="text-base font-medium text-gray-900 dark:text-white" x-text="metrics.hostname || 'Loading...'"></p>
+            </div>
+            <div>
+                <p class="text-sm text-gray-600 dark:text-gray-400">IP Address</p>
+                <p class="text-base font-medium text-gray-900 dark:text-white" x-text="metrics.ip_address || 'Loading...'"></p>
+            </div>
+            <div>
+                <p class="text-sm text-gray-600 dark:text-gray-400">OS</p>
+                <p class="text-base font-medium text-gray-900 dark:text-white" x-text="(metrics.os_name || '') + ' ' + (metrics.os_version || '')"></p>
+            </div>
+            <div>
+                <p class="text-sm text-gray-600 dark:text-gray-400">CPU Cores</p>
+                <p class="text-base font-medium text-gray-900 dark:text-white" x-text="metrics.cpu ? metrics.cpu.count : 'Loading...'"></p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function dashboard() {
+    return {
+        metrics: {},
+        loadMetrics() {
+            fetch('/api/servers/metrics/')
+                .then(response => response.json())
+                .then(data => {
+                    this.metrics = data;
+                })
+                .catch(error => {
+                    console.error('Error loading metrics:', error);
+                });
+            
+            // Refresh every 30 seconds
+            setInterval(() => {
+                fetch('/api/servers/metrics/')
+                    .then(response => response.json())
+                    .then(data => {
+                        this.metrics = data;
+                    })
+                    .catch(error => {
+                        console.error('Error loading metrics:', error);
+                    });
+            }, 30000);
+        }
+    }
+}
+</script>
+{% endblock %}
+

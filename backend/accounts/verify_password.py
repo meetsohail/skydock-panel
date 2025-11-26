@@ -7,8 +7,17 @@ Uses multiple methods to verify password.
 import sys
 import pexpect
 import os
-import crypt
-import spwd
+import warnings
+
+# Suppress deprecation warnings for crypt/spwd (they still work)
+warnings.filterwarnings('ignore', category=DeprecationWarning)
+
+try:
+    import crypt
+    import spwd
+except ImportError:
+    crypt = None
+    spwd = None
 
 if len(sys.argv) != 3:
     sys.stderr.write("Usage: verify_password.py <username> <password>\n")
@@ -18,27 +27,28 @@ username = sys.argv[1]
 password = sys.argv[2]
 
 # Method 1: Try using crypt with /etc/shadow (requires root or proper permissions)
-try:
-    shadow_entry = spwd.getspnam(username)
-    hashed = shadow_entry.sp_pwd
-    
-    # Skip locked accounts
-    if hashed in ['!', '*', 'x']:
-        sys.stderr.write("Account is locked\n")
-        sys.exit(1)
-    
-    # Verify using crypt
-    if crypt.crypt(password, hashed) == hashed:
-        sys.exit(0)
-    else:
-        sys.stderr.write("Password does not match (crypt method)\n")
-except (KeyError, PermissionError):
-    # User not in shadow or no permission - fall back to su method
-    sys.stderr.write("Cannot access shadow file, using su method\n")
-    pass
-except Exception as e:
-    sys.stderr.write(f"Crypt method error: {str(e)}\n")
-    pass
+if crypt and spwd:
+    try:
+        shadow_entry = spwd.getspnam(username)
+        hashed = shadow_entry.sp_pwd
+        
+        # Skip locked accounts
+        if hashed in ['!', '*', 'x']:
+            sys.stderr.write("Account is locked\n")
+            sys.exit(1)
+        
+        # Verify using crypt
+        if crypt.crypt(password, hashed) == hashed:
+            sys.exit(0)
+        else:
+            sys.stderr.write("Password does not match (crypt method)\n")
+    except (KeyError, PermissionError):
+        # User not in shadow or no permission - fall back to su method
+        sys.stderr.write("Cannot access shadow file, using su method\n")
+        pass
+    except Exception as e:
+        sys.stderr.write(f"Crypt method error: {str(e)}\n")
+        pass
 
 # Method 2: Use su with pexpect (fallback)
 try:
@@ -47,9 +57,22 @@ try:
     env['LANG'] = 'C'
     env['LC_ALL'] = 'C'
     
-    # Use su to verify password
+    # Use su to verify password - use full path
+    # Try common locations for su
+    su_paths = ['/bin/su', '/usr/bin/su', 'su']
+    su_path = None
+    
+    for path in su_paths:
+        if os.path.exists(path) or path == 'su':
+            su_path = path
+            break
+    
+    if not su_path:
+        sys.stderr.write("su command not found\n")
+        sys.exit(1)
+    
     child = pexpect.spawn(
-        'su',
+        su_path,
         ['-c', 'exit 0', username],
         timeout=15,
         encoding='utf-8',

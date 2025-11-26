@@ -496,7 +496,7 @@ Type=notify
 User=$SKYDOCK_USER
 Group=$SKYDOCK_USER
 WorkingDirectory=$SKYDOCK_HOME/backend
-Environment="PATH=$SKYDOCK_HOME/backend/venv/bin"
+Environment="PATH=$SKYDOCK_HOME/backend/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 EnvironmentFile=$SKYDOCK_HOME/backend/.env
 ExecStart=$SKYDOCK_HOME/backend/venv/bin/gunicorn \\
     --bind 0.0.0.0:$SKYDOCK_PORT \\

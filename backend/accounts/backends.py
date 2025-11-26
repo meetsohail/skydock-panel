@@ -96,8 +96,21 @@ class SystemUserBackend(BaseBackend):
             env['LANG'] = 'C'
             env['LC_ALL'] = 'C'
             
+            # Use full path to su
+            su_paths = ['/bin/su', '/usr/bin/su', 'su']
+            su_path = None
+            
+            for path in su_paths:
+                if os.path.exists(path) or path == 'su':
+                    su_path = path
+                    break
+            
+            if not su_path:
+                logger.error("su command not found")
+                return None
+            
             child = pexpect.spawn(
-                'su',
+                su_path,
                 ['-c', 'exit 0', username],
                 timeout=15,
                 encoding='utf-8',

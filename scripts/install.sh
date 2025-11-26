@@ -203,21 +203,48 @@ install_dependencies() {
     
     # Install mod_php as fallback if PHP-FPM is not available
     log_info "Installing Apache mod_php as fallback..."
-    for php_version in 8.1 8.2 8.3; do
+    mod_php_installed=false
+    for php_version in 8.3 8.2 8.1 8.0; do
         if apt-cache show "libapache2-mod-php${php_version}" >/dev/null 2>&1; then
-            apt-get install -y "libapache2-mod-php${php_version}" 2>/dev/null || true
-            a2enmod "php${php_version}" 2>/dev/null || true
-            log_info "Apache mod_php${php_version} installed and enabled"
-            break
+            if apt-get install -y "libapache2-mod-php${php_version}" 2>/dev/null; then
+                # Enable the module - try different naming conventions
+                a2enmod "php${php_version}" 2>/dev/null || \
+                a2enmod "php${php_version//./}" 2>/dev/null || \
+                a2enmod "php" 2>/dev/null || true
+                log_info "Apache mod_php${php_version} installed and enabled"
+                mod_php_installed=true
+                break
+            fi
         fi
     done
     
     # Fallback to generic mod_php if version-specific not available
-    if ! apache2ctl -M 2>/dev/null | grep -q "php"; then
+    if [ "$mod_php_installed" = false ]; then
         if apt-cache show libapache2-mod-php >/dev/null 2>&1; then
-            apt-get install -y libapache2-mod-php 2>/dev/null || true
-            a2enmod php7.4 2>/dev/null || a2enmod php8.0 2>/dev/null || a2enmod php 2>/dev/null || true
-            log_info "Generic Apache mod_php installed"
+            if apt-get install -y libapache2-mod-php 2>/dev/null; then
+                # Try to enable with various names
+                a2enmod php8.0 2>/dev/null || \
+                a2enmod php7.4 2>/dev/null || \
+                a2enmod php 2>/dev/null || true
+                log_info "Generic Apache mod_php installed"
+                mod_php_installed=true
+            fi
+        fi
+    fi
+    
+    # Verify mod_php is enabled
+    if [ "$mod_php_installed" = true ]; then
+        if apache2ctl -M 2>/dev/null | grep -qi "php"; then
+            log_info "mod_php is enabled in Apache"
+        else
+            log_warn "mod_php installed but not enabled. Attempting to enable..."
+            # Try all possible PHP module names
+            for mod_name in php8.3 php8.2 php8.1 php8.0 php7.4 php; do
+                if a2enmod "$mod_name" 2>/dev/null; then
+                    log_info "Enabled mod_php as $mod_name"
+                    break
+                fi
+            done
         fi
     fi
     

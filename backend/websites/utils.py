@@ -601,17 +601,52 @@ def create_apache_config(website: Website) -> Dict[str, any]:
         
         # Build PHP handler configuration
         if use_php_fpm:
-            # Use PHP-FPM
+            # Use PHP-FPM - explicitly set handler
             php_handler = f"""    # PHP-FPM handler configuration
     <FilesMatch \\.php$>
         SetHandler "proxy:unix:{php_fpm_socket}|fcgi://localhost"
     </FilesMatch>"""
             logger.info(f"Using PHP-FPM for {website.domain} (socket: {php_fpm_socket})")
         else:
-            # Use mod_php (fallback)
-            php_handler = f"""    # Using mod_php (PHP-FPM not available)
-    # PHP files will be processed by mod_php module"""
+            # Use mod_php (fallback) - DO NOT set a handler, let mod_php handle it automatically
+            # mod_php automatically processes .php files when the module is loaded
+            php_handler = """    # Using mod_php (PHP-FPM not available)
+    # mod_php automatically processes .php files when enabled
+    # No FilesMatch directive needed - mod_php handles it automatically"""
             logger.info(f"Using mod_php for {website.domain} (PHP-FPM not available)")
+            
+            # Verify and enable mod_php if needed
+            exit_code, stdout, stderr = run_command(['apache2ctl', '-M'], sudo=True)
+            mod_php_enabled = False
+            if exit_code == 0:
+                # Check if any PHP module is loaded
+                for line in stdout.split('\n'):
+                    if 'php' in line.lower() and ('shared' in line.lower() or 'static' in line.lower()):
+                        mod_php_enabled = True
+                        logger.info(f"mod_php is enabled: {line.strip()}")
+                        break
+            
+            if not mod_php_enabled:
+                logger.warning("mod_php does not appear to be enabled. Attempting to enable...")
+                # Try to enable mod_php for different versions
+                for php_version in ['8.3', '8.2', '8.1', '8.0', '7.4']:
+                    exit_code, stdout, stderr = run_command(['a2enmod', f'php{php_version}'], sudo=True)
+                    if exit_code == 0:
+                        logger.info(f"Enabled mod_php{php_version}")
+                        mod_php_enabled = True
+                        break
+                
+                # Try generic php module names
+                if not mod_php_enabled:
+                    for mod_name in ['php', 'php8', 'php7']:
+                        exit_code, stdout, stderr = run_command(['a2enmod', mod_name], sudo=True)
+                        if exit_code == 0:
+                            logger.info(f"Enabled mod_{mod_name}")
+                            mod_php_enabled = True
+                            break
+                
+                if not mod_php_enabled:
+                    logger.error("Failed to enable mod_php. PHP files may not execute properly.")
         
         config_content = f"""<VirtualHost *:8080>
     ServerName {website.domain}
@@ -1011,10 +1046,54 @@ def enable_website(website: Website) -> Dict[str, any]:
             else:
                 return {'success': False, 'error': f'Apache config test failed: {stderr}'}
         
-        # Restart Apache instead of reload to ensure PHP-FPM handler is properly loaded
+        # Verify PHP processing is available
+        exit_code, stdout, stderr = run_command(['apache2ctl', '-M'], sudo=True)
+        php_module_enabled = False
+        if exit_code == 0:
+            # Check if any PHP module is loaded (look for lines containing 'php')
+            for line in stdout.split('\n'):
+                line_lower = line.lower()
+                if 'php' in line_lower and ('shared' in line_lower or 'static' in line_lower):
+                    php_module_enabled = True
+                    logger.info(f"PHP module detected in Apache: {line.strip()}")
+                    break
+        
+        # Check if we're using PHP-FPM or mod_php
+        use_php_fpm = check_php_fpm_available(website.php_version)
+        
+        if not use_php_fpm and not php_module_enabled:
+            logger.warning("Neither PHP-FPM nor mod_php appears to be available. Attempting to enable mod_php...")
+            # Try to enable mod_php for different versions
+            mod_php_enabled = False
+            for php_version in ['8.3', '8.2', '8.1', '8.0', '7.4']:
+                exit_code, stdout, stderr = run_command(['a2enmod', f'php{php_version}'], sudo=True)
+                if exit_code == 0:
+                    logger.info(f"Enabled mod_php{php_version}")
+                    mod_php_enabled = True
+                    break
+            
+            # Try generic php module names
+            if not mod_php_enabled:
+                for mod_name in ['php', 'php8', 'php7']:
+                    exit_code, stdout, stderr = run_command(['a2enmod', mod_name], sudo=True)
+                    if exit_code == 0:
+                        logger.info(f"Enabled mod_{mod_name}")
+                        mod_php_enabled = True
+                        break
+            
+            if not mod_php_enabled:
+                logger.error("CRITICAL: Failed to enable mod_php. PHP files will not execute!")
+                return {'success': False, 'error': 'Neither PHP-FPM nor mod_php is available. PHP files cannot be processed.'}
+        
+        # Restart Apache instead of reload to ensure PHP handler is properly loaded
         exit_code, stdout, stderr = run_command(['systemctl', 'restart', 'apache2'], sudo=True)
         if exit_code != 0:
             return {'success': False, 'error': f'Failed to restart Apache: {stderr}'}
+        
+        # Verify Apache configuration is valid after restart
+        exit_code, stdout, stderr = run_command(['apache2ctl', 'configtest'], sudo=True)
+        if exit_code != 0:
+            logger.warning(f"Apache config test after restart: {stderr}")
         
         # Enable Nginx site (reverse proxy)
         source = os.path.abspath(os.path.join(settings.SKYDOCK_NGINX_SITES_AVAILABLE, website.domain))

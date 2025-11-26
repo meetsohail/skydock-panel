@@ -49,19 +49,33 @@ A modern, self-hosted VPS management panel that allows you to manage your server
 Install SkyDock Panel on a fresh Ubuntu server with a single command:
 
 ```bash
+# For main branch:
 wget -O install.sh https://raw.githubusercontent.com/meetsohail/skydock-panel/main/scripts/install.sh && bash install.sh
+
+# Or for master branch:
+wget -O install.sh https://raw.githubusercontent.com/meetsohail/skydock-panel/master/scripts/install.sh && bash install.sh
 ```
 
-### Manual Installation
+**Note**: If you get a 404 error, the repository may not be published yet. In that case, you can:
+1. Clone the repository manually: `git clone https://github.com/meetsohail/skydock-panel.git`
+2. Run the installer: `cd skydock-panel && sudo bash scripts/install.sh`
 
-1. **Clone the repository**:
+### Manual Installation (If repository not published yet)
+
+If the one-line installation fails with a 404 error, use manual installation:
+
+1. **Upload the project files to your server** (via SCP, SFTP, or git clone if repo exists):
 ```bash
-git clone https://github.com/meetsohail/skydock-panel.git
-cd skydock-panel
+# Option 1: If you have the files locally, upload them
+scp -r skydock-panel root@your-server-ip:/opt/
+
+# Option 2: If repository exists on GitHub
+git clone https://github.com/meetsohail/skydock-panel.git /opt/skydock-panel
 ```
 
 2. **Run the installer**:
 ```bash
+cd /opt/skydock-panel
 sudo bash scripts/install.sh
 ```
 

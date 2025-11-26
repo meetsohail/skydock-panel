@@ -205,8 +205,22 @@ clone_repository() {
     # Configure git to automatically accept new host keys
     export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=accept-new"
     
-    # Check if SkyDock is already installed
-    if check_skydock_installed; then
+    # Handle existing directory that is not a git repository
+    if [ -d "$SKYDOCK_HOME" ] && [ ! -d "$SKYDOCK_HOME/.git" ]; then
+        log_warn "Directory $SKYDOCK_HOME exists but is not a git repository."
+        log_warn "Backing up and cloning fresh..."
+        BACKUP_DIR="${SKYDOCK_HOME}.backup.$(date +%s)"
+        if mv "$SKYDOCK_HOME" "$BACKUP_DIR" 2>/dev/null; then
+            log_info "Backed up to $BACKUP_DIR"
+        else
+            log_error "Failed to backup existing directory. Please remove it manually:"
+            log_error "  rm -rf $SKYDOCK_HOME"
+            exit 1
+        fi
+    fi
+    
+    # Check if SkyDock is already installed and is a git repository
+    if check_skydock_installed && [ -d "$SKYDOCK_HOME/.git" ]; then
         log_info "SkyDock Panel is already installed. Updating code..."
         
         # Configure git for skydock user BEFORE any git operations
@@ -226,50 +240,33 @@ clone_repository() {
         sudo -u "$SKYDOCK_USER" -H git config --global --add safe.directory "$SKYDOCK_HOME" 2>/dev/null || true
         sudo -u "$SKYDOCK_USER" -H git config --global --add safe.directory "*" 2>/dev/null || true
         
-        # Check if it's a git repository
-        if [ -d "$SKYDOCK_HOME/.git" ]; then
-            # Run all git commands as skydock user to avoid ownership issues
-            log_info "Updating repository..."
-            
-            # Stash any local changes
-            sudo -u "$SKYDOCK_USER" -H bash -c "cd '$SKYDOCK_HOME' && GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=accept-new' git stash > /dev/null 2>&1 || true"
-            
-            # Pull latest changes
-            if sudo -u "$SKYDOCK_USER" -H bash -c "cd '$SKYDOCK_HOME' && GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=accept-new' git pull origin '$BRANCH'"; then
-                log_info "Repository updated successfully"
-            else
-                log_warn "SSH pull failed, trying HTTPS..."
-                # Try HTTPS as fallback
-                if sudo -u "$SKYDOCK_USER" -H bash -c "cd '$SKYDOCK_HOME' && git remote set-url origin '$REPO_URL_HTTPS' && git pull origin '$BRANCH'"; then
-                    log_info "Repository updated successfully via HTTPS"
-                else
-                    log_error "Failed to update repository. Please check:"
-                    log_error "  1. Repository URL is correct"
-                    log_error "  2. Branch exists: $BRANCH"
-                    log_error "  3. You have internet connectivity"
-                    log_error "  4. No local conflicts exist"
-                    exit 1
-                fi
-            fi
+        # Run all git commands as skydock user to avoid ownership issues
+        log_info "Updating repository..."
+        
+        # Stash any local changes
+        sudo -u "$SKYDOCK_USER" -H bash -c "cd '$SKYDOCK_HOME' && GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=accept-new' git stash > /dev/null 2>&1 || true"
+        
+        # Pull latest changes
+        if sudo -u "$SKYDOCK_USER" -H bash -c "cd '$SKYDOCK_HOME' && GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=accept-new' git pull origin '$BRANCH'"; then
+            log_info "Repository updated successfully"
         else
-            log_warn "Installation directory exists but is not a git repository."
-            log_warn "Backing up and cloning fresh..."
-            BACKUP_DIR="${SKYDOCK_HOME}.backup.$(date +%s)"
-            if mv "$SKYDOCK_HOME" "$BACKUP_DIR" 2>/dev/null; then
-                log_info "Backed up to $BACKUP_DIR"
-                # Continue to clone below
+            log_warn "SSH pull failed, trying HTTPS..."
+            # Try HTTPS as fallback
+            if sudo -u "$SKYDOCK_USER" -H bash -c "cd '$SKYDOCK_HOME' && git remote set-url origin '$REPO_URL_HTTPS' && git pull origin '$BRANCH'"; then
+                log_info "Repository updated successfully via HTTPS"
             else
-                log_error "Failed to backup existing directory. Please remove it manually:"
-                log_error "  rm -rf $SKYDOCK_HOME"
+                log_error "Failed to update repository. Please check:"
+                log_error "  1. Repository URL is correct"
+                log_error "  2. Branch exists: $BRANCH"
+                log_error "  3. You have internet connectivity"
+                log_error "  4. No local conflicts exist"
                 exit 1
             fi
         fi
-    fi
-    
-    # Clone if directory doesn't exist or was backed up
-    if [ ! -d "$SKYDOCK_HOME" ] || [ ! -d "$SKYDOCK_HOME/.git" ]; then
+    elif [ ! -d "$SKYDOCK_HOME" ]; then
+        # Clone if directory doesn't exist (fresh install or after backup)
+        log_info "Cloning repository..."
         # Try SSH clone first (with auto-accept host key)
-        log_info "Attempting to clone via SSH..."
         if GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=accept-new" git clone -b "$BRANCH" "$REPO_URL" "$SKYDOCK_HOME" 2>/dev/null; then
             log_info "Repository cloned via SSH"
         else

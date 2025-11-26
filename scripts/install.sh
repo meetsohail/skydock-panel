@@ -177,23 +177,53 @@ create_skydock_user() {
 create_admin_user() {
     local admin_username="admin"
     
+    # Generate random password
+    local admin_password=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-20)
+    
     # Check if admin user already exists
     if id "$admin_username" &>/dev/null; then
-        log_warn "User $admin_username already exists, skipping creation"
-        return 0
+        log_info "Admin user already exists, updating password..."
+        # Update password for existing user
+        if echo "$admin_username:$admin_password" | chpasswd; then
+            log_info "Admin user password updated successfully"
+            # Save credentials for final display
+            echo "$admin_username" > /tmp/skydock_admin_username.txt
+            echo "$admin_password" > /tmp/skydock_admin_password.txt
+            return 0
+        else
+            log_warn "Failed to update password for admin user"
+            return 1
+        fi
     fi
     
     log_info "Creating admin user..."
     
-    # Generate random password
-    local admin_password=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-20)
+    # Create the user - use -g flag if admin group exists, otherwise let system create default group
+    if getent group "$admin_username" >/dev/null 2>&1; then
+        # Admin group exists, use it
+        if useradd -m -s /bin/bash -g "$admin_username" "$admin_username"; then
+            user_created=true
+        else
+            # If that fails, try with a different group
+            useradd -m -s /bin/bash "$admin_username" 2>/dev/null || {
+                log_warn "Failed to create admin user (group conflict)"
+                return 1
+            }
+            user_created=true
+        fi
+    else
+        # No admin group, create user normally
+        if useradd -m -s /bin/bash "$admin_username"; then
+            user_created=true
+        else
+            log_warn "Failed to create admin user"
+            return 1
+        fi
+    fi
     
-    # Create the user
-    if useradd -m -s /bin/bash "$admin_username"; then
+    if [ "$user_created" = true ]; then
         # Set password using chpasswd (more reliable than passwd in scripts)
-        echo "$admin_username:$admin_password" | chpasswd
-        
-        if [ $? -eq 0 ]; then
+        if echo "$admin_username:$admin_password" | chpasswd; then
             log_info "Admin user created successfully"
             # Save credentials for final display
             echo "$admin_username" > /tmp/skydock_admin_username.txt
@@ -205,10 +235,9 @@ create_admin_user() {
             userdel -r "$admin_username" 2>/dev/null || true
             return 1
         fi
-    else
-        log_warn "Failed to create admin user"
-        return 1
     fi
+    
+    return 1
 }
 
 setup_github_ssh() {

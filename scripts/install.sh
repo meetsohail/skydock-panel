@@ -156,13 +156,33 @@ install_dependencies() {
         mysql-client \
         nginx \
         apache2 \
-        php-fpm \
-        php-mysql \
-        php-xml \
-        php-mbstring \
-        php-curl \
-        php-zip \
-        php-gd \
+        php8.1-fpm \
+        php8.1-mysql \
+        php8.1-xml \
+        php8.1-mbstring \
+        php8.1-curl \
+        php8.1-zip \
+        php8.1-gd \
+        php8.1-cli \
+        php8.1-common \
+        php8.2-fpm \
+        php8.2-mysql \
+        php8.2-xml \
+        php8.2-mbstring \
+        php8.2-curl \
+        php8.2-zip \
+        php8.2-gd \
+        php8.2-cli \
+        php8.2-common \
+        php8.3-fpm \
+        php8.3-mysql \
+        php8.3-xml \
+        php8.3-mbstring \
+        php8.3-curl \
+        php8.3-zip \
+        php8.3-gd \
+        php8.3-cli \
+        php8.3-common \
         redis-server \
         ufw \
         software-properties-common \
@@ -210,7 +230,7 @@ install_dependencies() {
     fi
     
     # Enable required Apache modules
-    a2enmod proxy proxy_http rewrite headers
+    a2enmod proxy proxy_http proxy_fcgi setenvif rewrite headers
     
     # Test Apache configuration
     if ! apache2ctl configtest >/dev/null 2>&1; then
@@ -231,8 +251,8 @@ install_dependencies() {
     fi
     
     # Start and enable services
-    systemctl enable nginx apache2
-    systemctl start nginx apache2
+    systemctl enable nginx apache2 php8.1-fpm php8.2-fpm php8.3-fpm
+    systemctl start nginx apache2 php8.1-fpm php8.2-fpm php8.3-fpm
     
     log_info "Nginx and Apache configured"
 }

@@ -174,6 +174,43 @@ create_skydock_user() {
     fi
 }
 
+create_admin_user() {
+    local admin_username="admin"
+    
+    # Check if admin user already exists
+    if id "$admin_username" &>/dev/null; then
+        log_warn "User $admin_username already exists, skipping creation"
+        return 0
+    fi
+    
+    log_info "Creating admin user..."
+    
+    # Generate random password
+    local admin_password=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-20)
+    
+    # Create the user
+    if useradd -m -s /bin/bash "$admin_username"; then
+        # Set password using chpasswd (more reliable than passwd in scripts)
+        echo "$admin_username:$admin_password" | chpasswd
+        
+        if [ $? -eq 0 ]; then
+            log_info "Admin user created successfully"
+            # Save credentials for final display
+            echo "$admin_username" > /tmp/skydock_admin_username.txt
+            echo "$admin_password" > /tmp/skydock_admin_password.txt
+            return 0
+        else
+            log_warn "Failed to set password for admin user"
+            # Delete the user if password setting failed
+            userdel -r "$admin_username" 2>/dev/null || true
+            return 1
+        fi
+    else
+        log_warn "Failed to create admin user"
+        return 1
+    fi
+}
+
 setup_github_ssh() {
     # Create .ssh directory if it doesn't exist
     mkdir -p ~/.ssh
@@ -542,6 +579,12 @@ main() {
     
     install_dependencies
     create_skydock_user
+    
+    # Create admin user only for fresh installations
+    if [ "$is_update" = false ]; then
+        create_admin_user
+    fi
+    
     clone_repository
     setup_python_venv
     setup_django
@@ -573,15 +616,27 @@ main() {
     
     # Show login information
     if [ "$is_update" = false ]; then
-        log_info "Login Information:"
-        log_info "  Use any system user account to login"
-        log_info "  Example: Use 'root' or any user created with 'useradd'"
-        log_info "  Password: Use the system password (set via 'passwd' command)"
-        log_info ""
-        log_info "To create a new user:"
-        log_info "  useradd -m -s /bin/bash username"
-        log_info "  passwd username"
-        log_info ""
+        # Check if admin user was created and credentials are available
+        if [ -f /tmp/skydock_admin_username.txt ] && [ -f /tmp/skydock_admin_password.txt ]; then
+            ADMIN_USERNAME=$(cat /tmp/skydock_admin_username.txt)
+            ADMIN_PASSWORD=$(cat /tmp/skydock_admin_password.txt)
+            log_info "Login Credentials:"
+            log_info "  Username: $ADMIN_USERNAME"
+            log_info "  Password: $ADMIN_PASSWORD"
+            log_info ""
+            # Clean up temporary files
+            rm -f /tmp/skydock_admin_username.txt /tmp/skydock_admin_password.txt
+        else
+            log_info "Login Information:"
+            log_info "  Use any system user account to login"
+            log_info "  Example: Use 'root' or any user created with 'useradd'"
+            log_info "  Password: Use the system password (set via 'passwd' command)"
+            log_info ""
+            log_info "To create a new user:"
+            log_info "  useradd -m -s /bin/bash username"
+            log_info "  passwd username"
+            log_info ""
+        fi
     fi
     
     # Disable error trap on success

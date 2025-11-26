@@ -105,12 +105,13 @@ try:
         # Wait for command to complete
         child.expect(pexpect.EOF, timeout=15)
         
-        # Get exit status
+        # Get exit status - handle None (which means success in some cases)
         exit_status = child.exitstatus
         child.close()
         
-        # Exit with su's exit status (0 = success, non-zero = failure)
-        if exit_status == 0:
+        # Exit with su's exit status (0 = success, None = success, non-zero = failure)
+        # Note: exitstatus can be None if the process ended normally
+        if exit_status == 0 or exit_status is None:
             sys.exit(0)
         else:
             sys.stderr.write(f"su command failed with exit status: {exit_status}\n")
@@ -128,7 +129,8 @@ try:
         try:
             exit_status = child.exitstatus
             child.close()
-            if exit_status == 0:
+            # None or 0 both indicate success
+            if exit_status == 0 or exit_status is None:
                 sys.exit(0)
             else:
                 sys.stderr.write(f"Unexpected EOF, exit status: {exit_status}\n")

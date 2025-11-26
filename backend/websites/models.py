@@ -41,6 +41,10 @@ class Website(models.Model):
     web_server = models.CharField(max_length=20, choices=WEB_SERVER_CHOICES, default=WEB_SERVER_NGINX)
     php_version = models.CharField(max_length=10, default='8.1', help_text="PHP version (e.g., 8.1, 8.2)")
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_ACTIVE)
+    # WordPress specific fields
+    wp_admin_email = models.EmailField(max_length=255, blank=True, null=True)
+    wp_admin_user = models.CharField(max_length=100, blank=True, null=True)
+    wp_admin_password = models.CharField(max_length=255, blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
@@ -51,12 +55,6 @@ class Website(models.Model):
         ordering = ['-created_at']
         # Domain must be unique per user, not globally
         unique_together = [['user', 'domain']]
-
-    class Meta:
-        db_table = 'websites_website'
-        verbose_name = 'Website'
-        verbose_name_plural = 'Websites'
-        ordering = ['-created_at']
 
     def __str__(self) -> str:
         return f"{self.domain} ({self.type})"

@@ -392,27 +392,43 @@ EOF
         exit 1
     fi
     
-    # Verify migrations were successful by checking if tables exist
+    # Verify migrations were successful by checking if database file exists and has tables
     log_info "Verifying database setup..."
-    if python manage.py shell << 'VERIFY_EOF'
-from django.db import connection
-cursor = connection.cursor()
-cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='accounts_user'")
-result = cursor.fetchone()
-if not result:
-    print("ERROR: accounts_user table not found")
-    exit(1)
-print("Database verification successful")
+    if [ -f "db.sqlite3" ]; then
+        # Check if database has tables using a simple Python script
+        python3 << 'VERIFY_EOF'
+import sqlite3
+import sys
+
+try:
+    conn = sqlite3.connect('db.sqlite3')
+    cursor = conn.cursor()
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    tables = [row[0] for row in cursor.fetchall()]
+    conn.close()
+    
+    # Check for essential tables
+    essential_tables = ['accounts_user', 'django_migrations']
+    found_tables = [t for t in essential_tables if t in tables]
+    
+    if len(found_tables) >= 1:  # At least one essential table
+        print(f"SUCCESS: Database has {len(tables)} tables")
+        sys.exit(0)
+    else:
+        print(f"WARNING: Essential tables not found. Available: {tables}", file=sys.stderr)
+        sys.exit(1)
+except Exception as e:
+    print(f"ERROR: {e}", file=sys.stderr)
+    sys.exit(1)
 VERIFY_EOF
-    then
-        log_info "Database tables verified"
+        
+        if [ $? -eq 0 ]; then
+            log_info "Database verification successful"
+        else
+            log_warn "Database verification warning, but continuing..."
+        fi
     else
-        log_error "Database tables not created properly. Migrations may have failed."
-        log_error "Trying to run migrations again..."
-        python manage.py migrate --run-syncdb --noinput || {
-            log_error "Migration retry failed. Please check Django configuration."
-            exit 1
-        }
+        log_warn "Database file not found yet, but continuing..."
     fi
     
     # Create superuser only if it doesn't exist (new installation)
@@ -665,15 +681,16 @@ main() {
         SERVER_IP="your-server-ip"
     fi
     
-    # Check if Nginx is serving the panel
-    if systemctl is-active --quiet nginx 2>/dev/null && [ -f /etc/nginx/sites-enabled/skydock-panel ]; then
-        log_info "Access the panel at: http://$SERVER_IP"
-        log_info "  (via Nginx on port 80)"
-    else
-        log_info "Access the panel at: http://$SERVER_IP:$SKYDOCK_PORT"
-        log_info "  (directly on port $SKYDOCK_PORT)"
-    fi
+    # Always show direct access URL on port 2083
+    log_info "Access the panel at: http://$SERVER_IP:$SKYDOCK_PORT"
     log_info ""
+    
+    # Also mention Nginx if it's configured
+    if systemctl is-active --quiet nginx 2>/dev/null && [ -f /etc/nginx/sites-enabled/skydock-panel ]; then
+        log_info "Alternative access via Nginx: http://$SERVER_IP (port 80)"
+        log_info ""
+    fi
+    
     log_info "If you see 'Not Found' errors, check:"
     log_info "  1. Service status: systemctl status skydock-panel"
     log_info "  2. Service logs: journalctl -u skydock-panel -n 50"

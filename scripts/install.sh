@@ -212,6 +212,9 @@ clone_repository() {
             exit 1
         }
         
+        # Fix Git ownership issue - add to safe.directory
+        git config --global --add safe.directory "$SKYDOCK_HOME" 2>/dev/null || true
+        
         # Check if it's a git repository
         if [ -d ".git" ]; then
             # Stash any local changes
@@ -278,6 +281,9 @@ clone_repository() {
         log_error "Please ensure the repository contains the correct Django structure."
         exit 1
     fi
+    
+    # Fix Git ownership issue - add to safe.directory before operations
+    git config --global --add safe.directory "$SKYDOCK_HOME" 2>/dev/null || true
     
     chown -R "$SKYDOCK_USER:$SKYDOCK_USER" "$SKYDOCK_HOME"
     log_info "Repository setup complete"

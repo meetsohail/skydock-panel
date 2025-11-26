@@ -204,24 +204,36 @@ clone_repository() {
     # Configure git to automatically accept new host keys
     export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=accept-new"
     
+    # Pre-configure safe.directory for root user to avoid ownership issues
+    git config --global --add safe.directory "$SKYDOCK_HOME" 2>/dev/null || true
+    
     # Check if SkyDock is already installed
     if check_skydock_installed; then
         log_info "SkyDock Panel is already installed. Updating code..."
+        
+        # Fix Git ownership issue - add to safe.directory BEFORE any git operations
+        log_info "Configuring Git safe directory..."
+        git config --global --add safe.directory "$SKYDOCK_HOME" 2>/dev/null || {
+            # If --add fails, try --replace-all
+            git config --global --replace-all safe.directory "$SKYDOCK_HOME" 2>/dev/null || true
+        }
+        
         cd "$SKYDOCK_HOME" || {
             log_error "Failed to change to $SKYDOCK_HOME"
             exit 1
         }
         
-        # Fix Git ownership issue - add to safe.directory
-        git config --global --add safe.directory "$SKYDOCK_HOME" 2>/dev/null || true
-        
         # Check if it's a git repository
         if [ -d ".git" ]; then
-            # Stash any local changes
-            git stash > /dev/null 2>&1 || true
+            # Ensure safe.directory is set (multiple methods for compatibility)
+            git config --global --add safe.directory "$SKYDOCK_HOME" 2>/dev/null || true
+            git config --global --add safe.directory "*" 2>/dev/null || true
             
-            # Pull latest changes
-            if git pull origin "$BRANCH"; then
+            # Stash any local changes (using -c flag to override safe.directory check)
+            git -c safe.directory="$SKYDOCK_HOME" stash > /dev/null 2>&1 || true
+            
+            # Pull latest changes (using -c flag to override safe.directory check)
+            if git -c safe.directory="$SKYDOCK_HOME" pull origin "$BRANCH"; then
                 log_info "Repository updated successfully"
             else
                 log_error "Failed to update repository. Please check:"

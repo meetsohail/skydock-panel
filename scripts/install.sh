@@ -201,6 +201,49 @@ install_dependencies() {
             php-common 2>/dev/null || log_warn "Generic PHP packages failed to install"
     fi
     
+    # Install mod_php as fallback if PHP-FPM is not available
+    log_info "Installing Apache mod_php as fallback..."
+    for php_version in 8.1 8.2 8.3; do
+        if apt-cache show "libapache2-mod-php${php_version}" >/dev/null 2>&1; then
+            apt-get install -y "libapache2-mod-php${php_version}" 2>/dev/null || true
+            a2enmod "php${php_version}" 2>/dev/null || true
+            log_info "Apache mod_php${php_version} installed and enabled"
+            break
+        fi
+    done
+    
+    # Fallback to generic mod_php if version-specific not available
+    if ! apache2ctl -M 2>/dev/null | grep -q "php"; then
+        if apt-cache show libapache2-mod-php >/dev/null 2>&1; then
+            apt-get install -y libapache2-mod-php 2>/dev/null || true
+            a2enmod php7.4 2>/dev/null || a2enmod php8.0 2>/dev/null || a2enmod php 2>/dev/null || true
+            log_info "Generic Apache mod_php installed"
+        fi
+    fi
+    
+    # Install phpMyAdmin
+    log_info "Installing phpMyAdmin..."
+    if apt-cache show phpmyadmin >/dev/null 2>&1; then
+        # Install phpMyAdmin (use debconf to skip interactive prompts)
+        echo "phpmyadmin phpmyadmin/dbconfig-install boolean false" | debconf-set-selections
+        echo "phpmyadmin phpmyadmin/app-password-confirm password" | debconf-set-selections
+        echo "phpmyadmin phpmyadmin/mysql/admin-pass password" | debconf-set-selections
+        echo "phpmyadmin phpmyadmin/mysql/app-pass password" | debconf-set-selections
+        echo "phpmyadmin phpmyadmin/reconfigure-webserver multiselect apache2" | debconf-set-selections
+        
+        DEBIAN_FRONTEND=noninteractive apt-get install -y phpmyadmin 2>/dev/null || log_warn "phpMyAdmin installation had some issues, but continuing..."
+        
+        # Configure phpMyAdmin to work with Apache on port 8080
+        if [ -f /etc/apache2/conf-available/phpmyadmin.conf ]; then
+            # Enable phpMyAdmin configuration
+            a2enconf phpmyadmin 2>/dev/null || true
+        fi
+        
+        log_info "phpMyAdmin installed"
+    else
+        log_warn "phpMyAdmin package not found in repository, skipping installation"
+    fi
+    
     log_info "System dependencies installed"
     
     # Configure Apache to listen on port 8080 for reverse proxy
@@ -705,6 +748,78 @@ setup_nginx() {
     # Remove any existing Nginx configuration for SkyDock Panel
     rm -f /etc/nginx/sites-enabled/skydock-panel
     rm -f /etc/nginx/sites-available/skydock-panel
+    
+    # Configure phpMyAdmin in Nginx if it's installed
+    if [ -d /usr/share/phpmyadmin ]; then
+        log_info "Configuring phpMyAdmin in Nginx..."
+        
+        # Create Nginx configuration for phpMyAdmin
+        cat > /etc/nginx/sites-available/phpmyadmin << 'EOF'
+server {
+    listen 80;
+    server_name _;
+    
+    root /usr/share/phpmyadmin;
+    index index.php index.html index.htm;
+    
+    location /phpmyadmin {
+        alias /usr/share/phpmyadmin;
+        try_files $uri $uri/ =404;
+        
+        location ~ \.php$ {
+            include snippets/fastcgi-php.conf;
+            fastcgi_pass unix:/var/run/php/php8.1-fpm.sock;
+            fastcgi_param SCRIPT_FILENAME $request_filename;
+        }
+    }
+    
+    location ~ /phpmyadmin/(.+\.php)$ {
+        alias /usr/share/phpmyadmin/$1;
+        fastcgi_pass unix:/var/run/php/php8.1-fpm.sock;
+        fastcgi_index index.php;
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME $request_filename;
+    }
+    
+    location ~* /phpmyadmin/(.+\.(jpg|jpeg|gif|css|png|js|ico|html|xml|txt))$ {
+        alias /usr/share/phpmyadmin/$1;
+    }
+}
+EOF
+        
+        # Try to find available PHP-FPM socket and update configuration
+        php_socket_found=false
+        for php_version in 8.3 8.2 8.1; do
+            php_clean=$(echo "$php_version" | tr -d '.')
+            if [ -S "/var/run/php/php${php_clean}-fpm.sock" ]; then
+                sed -i "s|php8.1-fpm.sock|php${php_clean}-fpm.sock|g" /etc/nginx/sites-available/phpmyadmin
+                php_socket_found=true
+                log_info "Using PHP ${php_version}-FPM socket for phpMyAdmin"
+                break
+            fi
+        done
+        
+        # If no version-specific socket found, try generic php-fpm
+        if [ "$php_socket_found" = false ]; then
+            if [ -S "/var/run/php/php-fpm.sock" ]; then
+                sed -i "s|php8.1-fpm.sock|php-fpm.sock|g" /etc/nginx/sites-available/phpmyadmin
+                log_info "Using generic PHP-FPM socket for phpMyAdmin"
+            else
+                log_warn "No PHP-FPM socket found, phpMyAdmin may not work correctly"
+            fi
+        fi
+        
+        # Enable phpMyAdmin site
+        ln -sf /etc/nginx/sites-available/phpmyadmin /etc/nginx/sites-enabled/phpmyadmin 2>/dev/null || true
+        
+        # Test Nginx configuration
+        if nginx -t >/dev/null 2>&1; then
+            systemctl reload nginx 2>/dev/null || true
+            log_info "phpMyAdmin configured in Nginx"
+        else
+            log_warn "phpMyAdmin Nginx configuration has errors, but continuing..."
+        fi
+    fi
 }
 
 setup_firewall() {

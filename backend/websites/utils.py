@@ -554,13 +554,64 @@ def create_nginx_config(website: Website) -> Dict[str, any]:
         return {'success': False, 'error': str(e)}
 
 
+def check_php_fpm_available(php_version: str) -> bool:
+    """Check if PHP-FPM socket is available for the given PHP version."""
+    try:
+        php_version_clean = php_version.replace(".", "")
+        socket_path = f"/var/run/php/php{php_version_clean}-fpm.sock"
+        
+        # Check if socket exists
+        exit_code, stdout, stderr = run_command(['test', '-S', socket_path], sudo=True)
+        if exit_code == 0:
+            return True
+        
+        # Try generic php-fpm socket
+        exit_code, stdout, stderr = run_command(['test', '-S', '/var/run/php/php-fpm.sock'], sudo=True)
+        if exit_code == 0:
+            return True
+        
+        return False
+    except Exception:
+        return False
+
+
 def create_apache_config(website: Website) -> Dict[str, any]:
     """Create Apache virtual host configuration (runs on port 8080 for Nginx reverse proxy).
-    Includes PHP-FPM handler for processing PHP files.
+    Uses PHP-FPM if available, otherwise falls back to mod_php.
     """
     try:
         # Get PHP version without dots for FPM socket path (e.g., 8.1 -> 81)
         php_version_clean = website.php_version.replace(".", "")
+        
+        # Check if PHP-FPM is available
+        use_php_fpm = check_php_fpm_available(website.php_version)
+        
+        # Determine which PHP-FPM socket to use
+        php_fpm_socket = f"/var/run/php/php{php_version_clean}-fpm.sock"
+        if use_php_fpm:
+            # Verify the specific socket exists
+            exit_code, stdout, stderr = run_command(['test', '-S', php_fpm_socket], sudo=True)
+            if exit_code != 0:
+                # Try generic php-fpm socket
+                exit_code, stdout, stderr = run_command(['test', '-S', '/var/run/php/php-fpm.sock'], sudo=True)
+                if exit_code == 0:
+                    php_fpm_socket = "/var/run/php/php-fpm.sock"
+                else:
+                    use_php_fpm = False
+        
+        # Build PHP handler configuration
+        if use_php_fpm:
+            # Use PHP-FPM
+            php_handler = f"""    # PHP-FPM handler configuration
+    <FilesMatch \\.php$>
+        SetHandler "proxy:unix:{php_fpm_socket}|fcgi://localhost"
+    </FilesMatch>"""
+            logger.info(f"Using PHP-FPM for {website.domain} (socket: {php_fpm_socket})")
+        else:
+            # Use mod_php (fallback)
+            php_handler = f"""    # Using mod_php (PHP-FPM not available)
+    # PHP files will be processed by mod_php module"""
+            logger.info(f"Using mod_php for {website.domain} (PHP-FPM not available)")
         
         config_content = f"""<VirtualHost *:8080>
     ServerName {website.domain}
@@ -573,10 +624,7 @@ def create_apache_config(website: Website) -> Dict[str, any]:
         Require all granted
     </Directory>
     
-    # PHP-FPM handler configuration - must be outside Directory block
-    <FilesMatch \\.php$>
-        SetHandler "proxy:unix:/var/run/php/php{php_version_clean}-fpm.sock|fcgi://localhost"
-    </FilesMatch>
+{php_handler}
 
     # Directory index
     DirectoryIndex index.php index.html index.htm
@@ -861,7 +909,9 @@ def fix_apache_ports_conf() -> bool:
 
 
 def ensure_php_fpm_running(php_version: str) -> Dict[str, any]:
-    """Ensure PHP-FPM service is running for the specified PHP version."""
+    """Ensure PHP-FPM service is running for the specified PHP version.
+    Returns success=True even if PHP-FPM is not available (will use mod_php fallback).
+    """
     try:
         php_version_clean = php_version.replace(".", "")
         service_name = f"php{php_version_clean}-fpm"
@@ -872,9 +922,16 @@ def ensure_php_fpm_running(php_version: str) -> Dict[str, any]:
         ], sudo=True)
         
         if exit_code != 0 or service_name not in stdout:
-            logger.warning(f"PHP-FPM service {service_name} not found. Trying to start generic php-fpm service.")
+            logger.warning(f"PHP-FPM service {service_name} not found. Will use mod_php fallback.")
             # Try generic php-fpm service
             service_name = 'php-fpm'
+            exit_code, stdout, stderr = run_command([
+                'systemctl', 'list-unit-files', '--type=service', f'{service_name}.service'
+            ], sudo=True)
+            
+            if exit_code != 0 or service_name not in stdout:
+                logger.info("PHP-FPM not available, will use mod_php for PHP processing")
+                return {'success': True, 'fallback': 'mod_php'}
         
         # Check if service is running
         exit_code, stdout, stderr = run_command([
@@ -889,7 +946,7 @@ def ensure_php_fpm_running(php_version: str) -> Dict[str, any]:
             ], sudo=True)
             
             if exit_code != 0:
-                logger.warning(f"Failed to start {service_name}: {stderr}")
+                logger.warning(f"Failed to start {service_name}: {stderr}. Will use mod_php fallback.")
                 # Try to enable and start
                 run_command(['systemctl', 'enable', f'{service_name}.service'], sudo=True)
                 run_command(['systemctl', 'start', f'{service_name}.service'], sudo=True)
@@ -899,28 +956,23 @@ def ensure_php_fpm_running(php_version: str) -> Dict[str, any]:
         exit_code, stdout, stderr = run_command(['test', '-S', socket_path], sudo=True)
         
         if exit_code != 0:
-            logger.warning(f"PHP-FPM socket not found at {socket_path}. Service may need to be restarted.")
-            # Try to restart the service
-            run_command(['systemctl', 'restart', f'{service_name}.service'], sudo=True)
-            # Wait a moment for socket to be created
-            import time
-            time.sleep(2)
-            # Check again
+            # Try generic socket
+            socket_path = "/var/run/php/php-fpm.sock"
             exit_code, stdout, stderr = run_command(['test', '-S', socket_path], sudo=True)
+            
             if exit_code != 0:
-                logger.error(f"PHP-FPM socket still not found at {socket_path} after restart")
-                return {'success': False, 'error': f'PHP-FPM socket not found: {socket_path}'}
+                logger.warning(f"PHP-FPM socket not found. Will use mod_php fallback.")
+                return {'success': True, 'fallback': 'mod_php'}
         
         # Ensure socket has correct permissions (www-data should be able to access it)
-        # PHP-FPM usually sets this correctly, but let's verify
         exit_code, stdout, stderr = run_command(['ls', '-l', socket_path], sudo=True)
         if exit_code == 0:
-            logger.info(f"PHP-FPM socket permissions: {stdout.strip()}")
+            logger.info(f"PHP-FPM socket available: {socket_path}")
         
-        return {'success': True}
+        return {'success': True, 'socket': socket_path}
     except Exception as e:
-        logger.error(f"Error ensuring PHP-FPM is running: {e}")
-        return {'success': False, 'error': str(e)}
+        logger.warning(f"Error checking PHP-FPM: {e}. Will use mod_php fallback.")
+        return {'success': True, 'fallback': 'mod_php'}
 
 
 def enable_website(website: Website) -> Dict[str, any]:
@@ -928,10 +980,12 @@ def enable_website(website: Website) -> Dict[str, any]:
     try:
         # Always enable both Nginx (reverse proxy) and Apache (backend)
         
-        # Ensure PHP-FPM is running for the website's PHP version
+        # Ensure PHP-FPM is running for the website's PHP version (or use mod_php fallback)
         php_result = ensure_php_fpm_running(website.php_version)
-        if not php_result['success']:
-            logger.warning(f"PHP-FPM check failed: {php_result.get('error', 'Unknown error')}")
+        if php_result.get('fallback') == 'mod_php':
+            logger.info("Using mod_php for PHP processing (PHP-FPM not available)")
+        elif not php_result.get('success'):
+            logger.warning(f"PHP-FPM check failed: {php_result.get('error', 'Unknown error')}, will use mod_php")
         
         # Fix Apache ports.conf if needed
         if not fix_apache_ports_conf():

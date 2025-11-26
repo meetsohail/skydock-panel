@@ -33,7 +33,10 @@ def create_directory(path: str, owner_user: Optional[str] = None) -> Dict[str, a
     try:
         # Ensure web root exists first
         web_root = settings.SKYDOCK_WEB_ROOT
-        if not os.path.exists(web_root):
+        # Check if web root exists using sudo (for system directories)
+        exit_code, stdout, stderr = run_command(['test', '-d', web_root], sudo=True)
+        web_root_exists = (exit_code == 0)
+        if not web_root_exists:
             logger.info(f"Creating web root directory: {web_root}")
             exit_code, stdout, stderr = run_command(['mkdir', '-p', web_root], sudo=True)
             if exit_code != 0:
@@ -46,19 +49,26 @@ def create_directory(path: str, owner_user: Optional[str] = None) -> Dict[str, a
         
         # Create parent directories if they don't exist
         parent_dir = os.path.dirname(path)
-        if parent_dir and parent_dir != path and not os.path.exists(parent_dir):
-            logger.info(f"Creating parent directory: {parent_dir}")
-            # Try to create parent directory with sudo
-            exit_code, stdout, stderr = run_command(['mkdir', '-p', parent_dir], sudo=True)
-            if exit_code != 0:
-                error_msg = f"Failed to create parent directory {parent_dir}: {stderr}"
-                logger.error(error_msg)
-                return {'success': False, 'error': error_msg}
-            # Set parent directory ownership (we'll verify user exists later)
-            run_command(['chmod', '755', parent_dir], sudo=True)
+        if parent_dir and parent_dir != path:
+            # Check if parent exists using sudo
+            exit_code, stdout, stderr = run_command(['test', '-d', parent_dir], sudo=True)
+            parent_exists = (exit_code == 0)
+            if not parent_exists:
+                logger.info(f"Creating parent directory: {parent_dir}")
+                # Try to create parent directory with sudo
+                exit_code, stdout, stderr = run_command(['mkdir', '-p', parent_dir], sudo=True)
+                if exit_code != 0:
+                    error_msg = f"Failed to create parent directory {parent_dir}: {stderr}"
+                    logger.error(error_msg)
+                    return {'success': False, 'error': error_msg}
+                # Set parent directory ownership (we'll verify user exists later)
+                run_command(['chmod', '755', parent_dir], sudo=True)
         
         # Create the directory itself with sudo
-        if not os.path.exists(path):
+        # Check if directory exists using sudo
+        exit_code, stdout, stderr = run_command(['test', '-d', path], sudo=True)
+        path_exists = (exit_code == 0)
+        if not path_exists:
             logger.info(f"Creating directory: {path}")
             exit_code, stdout, stderr = run_command(['mkdir', '-p', path], sudo=True)
             if exit_code != 0:
@@ -786,19 +796,29 @@ def enable_website(website: Website) -> Dict[str, any]:
             return {'success': False, 'error': f'Failed to reload Apache: {stderr}'}
         
         # Enable Nginx site (reverse proxy)
-        source = os.path.join(settings.SKYDOCK_NGINX_SITES_AVAILABLE, website.domain)
-        target = os.path.join(settings.SKYDOCK_NGINX_SITES_ENABLED, website.domain)
+        source = os.path.abspath(os.path.join(settings.SKYDOCK_NGINX_SITES_AVAILABLE, website.domain))
+        target = os.path.abspath(os.path.join(settings.SKYDOCK_NGINX_SITES_ENABLED, website.domain))
+        
+        # Ensure source file exists
+        exit_code, stdout, stderr = run_command(['test', '-f', source], sudo=True)
+        if exit_code != 0:
+            return {'success': False, 'error': f'Nginx config file not found: {source}'}
         
         # Remove existing symlink if it exists (using sudo)
         exit_code, stdout, stderr = run_command(['rm', '-f', target], sudo=True)
         
-        # Create symlink using sudo
+        # Create symlink using sudo with absolute paths
         exit_code, stdout, stderr = run_command([
-            'ln', '-s', source, target
+            'ln', '-sf', source, target
         ], sudo=True)
         
         if exit_code != 0:
             return {'success': False, 'error': f'Failed to create Nginx symlink: {stderr}'}
+        
+        # Verify symlink was created
+        exit_code, stdout, stderr = run_command(['test', '-L', target], sudo=True)
+        if exit_code != 0:
+            return {'success': False, 'error': f'Failed to verify Nginx symlink creation'}
         
         # Test and reload Nginx
         exit_code, stdout, stderr = run_command(['nginx', '-t'], sudo=True)
@@ -831,9 +851,10 @@ def disable_website(website: Website) -> Dict[str, any]:
             return {'success': False, 'error': f'Failed to reload Apache: {stderr}'}
         
         # Disable Nginx site
-        target = os.path.join(settings.SKYDOCK_NGINX_SITES_ENABLED, website.domain)
+        target = os.path.abspath(os.path.join(settings.SKYDOCK_NGINX_SITES_ENABLED, website.domain))
         # Remove symlink using sudo
         exit_code, stdout, stderr = run_command(['rm', '-f', target], sudo=True)
+        # Ignore errors if symlink doesn't exist
         
         exit_code, stdout, stderr = run_command(['systemctl', 'reload', 'nginx'], sudo=True)
         if exit_code != 0:

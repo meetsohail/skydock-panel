@@ -885,15 +885,18 @@ def fix_apache_ports_conf() -> bool:
         exit_code, stdout, stderr = run_command(['cat', ports_conf_path], sudo=True)
         if exit_code != 0:
             logger.error(f"Failed to read ports.conf: {stderr}")
-            return False
+            # Create a minimal valid ports.conf
+            content = "# SkyDock Panel - Apache Ports Configuration\nListen 8080\n"
+        else:
+            content = stdout
         
-        content = stdout
+        # Check if Listen 8080 exists (exact match on its own line)
+        import re
+        has_listen_8080 = bool(re.search(r'^[[:space:]]*Listen[[:space:]]+8080[[:space:]]*$', content, re.MULTILINE))
         
-        # Check if Listen 8080 exists
-        if 'Listen 8080' not in content:
+        if not has_listen_8080:
             # Remove any malformed Listen lines and add proper one
             import tempfile
-            import re
             
             # Remove lines that might be malformed (Listen without proper format)
             lines = content.split('\n')
@@ -901,19 +904,23 @@ def fix_apache_ports_conf() -> bool:
             listen_8080_exists = False
             
             for line in lines:
+                stripped = line.strip()
                 # Skip malformed Listen lines (like "Listen 8080Listen 80")
-                if re.match(r'^Listen\s+8080', line.strip()):
+                if re.match(r'^Listen\s+8080', stripped):
                     if not listen_8080_exists:
                         fixed_lines.append('Listen 8080')
                         listen_8080_exists = True
-                elif re.match(r'^Listen\s+80\s*$', line.strip()):
-                    # Skip Listen 80
-                    continue
+                elif re.match(r'^Listen\s+80\s*$', stripped):
+                    # Comment out Listen 80 instead of removing
+                    fixed_lines.append('#Listen 80  # Commented out by SkyDock Panel')
                 elif 'Listen 8080' in line and 'Listen 80' in line:
                     # Skip malformed combined lines
                     if not listen_8080_exists:
                         fixed_lines.append('Listen 8080')
                         listen_8080_exists = True
+                elif re.match(r'^Listen\s+443', stripped):
+                    # Keep Listen 443 if it exists
+                    fixed_lines.append(line)
                 else:
                     fixed_lines.append(line)
             
@@ -929,6 +936,11 @@ def fix_apache_ports_conf() -> bool:
                         insert_pos = i + 1
                 
                 fixed_lines.insert(insert_pos, 'Listen 8080')
+            
+            # Ensure we have at least a minimal valid config
+            if not any('Listen' in line for line in fixed_lines if not line.strip().startswith('#')):
+                fixed_lines.insert(0, '# SkyDock Panel - Apache Ports Configuration')
+                fixed_lines.insert(1, 'Listen 8080')
             
             # Write fixed content to temp file
             with tempfile.NamedTemporaryFile(mode='w', delete=False) as tmp_file:
@@ -946,6 +958,7 @@ def fix_apache_ports_conf() -> bool:
                     return False
                 
                 run_command(['chmod', '644', ports_conf_path], sudo=True)
+                logger.info("Fixed Apache ports.conf - added Listen 8080")
                 return True
             finally:
                 try:
@@ -953,9 +966,15 @@ def fix_apache_ports_conf() -> bool:
                 except:
                     pass
         
+        # Verify the config is valid
+        exit_code, stdout, stderr = run_command(['apache2ctl', 'configtest'], sudo=True)
+        if exit_code != 0:
+            logger.warning(f"Apache config test failed after fix: {stdout + stderr}")
+            return False
+        
         return True
     except Exception as e:
-        logger.error(f"Error fixing Apache ports.conf: {e}")
+        logger.error(f"Error fixing Apache ports.conf: {e}", exc_info=True)
         return False
 
 
@@ -1026,10 +1045,67 @@ def ensure_php_fpm_running(php_version: str) -> Dict[str, any]:
         return {'success': True, 'fallback': 'mod_php'}
 
 
+def ensure_apache_log_dirs() -> bool:
+    """Ensure Apache log directories exist and have proper permissions."""
+    try:
+        log_dir = '/var/log/apache2'
+        
+        # Check if directory exists
+        exit_code, stdout, stderr = run_command(['test', '-d', log_dir], sudo=True)
+        if exit_code != 0:
+            # Create directory
+            logger.info(f"Creating Apache log directory: {log_dir}")
+            exit_code, stdout, stderr = run_command(['mkdir', '-p', log_dir], sudo=True)
+            if exit_code != 0:
+                logger.error(f"Failed to create log directory {log_dir}: {stderr}")
+                return False
+        
+        # Set proper permissions
+        run_command(['chown', '-R', 'www-data:www-data', log_dir], sudo=True)
+        run_command(['chmod', '755', log_dir], sudo=True)
+        
+        return True
+    except Exception as e:
+        logger.error(f"Error ensuring Apache log directories: {e}")
+        return False
+
+
+def ensure_apache_servername() -> bool:
+    """Ensure Apache has a ServerName directive to suppress warnings."""
+    try:
+        apache2_conf = '/etc/apache2/apache2.conf'
+        
+        # Check if ServerName exists
+        exit_code, stdout, stderr = run_command(['grep', '-q', '^ServerName', apache2_conf], sudo=True)
+        if exit_code == 0:
+            return True  # ServerName already exists
+        
+        # Add ServerName directive using echo append
+        exit_code, stdout, stderr = run_command([
+            'sh', '-c', f'echo "ServerName localhost" >> {apache2_conf}'
+        ], sudo=True)
+        
+        if exit_code != 0:
+            logger.warning(f"Failed to add ServerName to apache2.conf: {stderr}")
+            return False
+        
+        return True
+    except Exception as e:
+        logger.warning(f"Error adding ServerName: {e}")
+        return False
+
+
 def enable_website(website: Website) -> Dict[str, any]:
     """Enable website by creating symlinks and reloading web servers (Nginx + Apache)."""
     try:
         # Always enable both Nginx (reverse proxy) and Apache (backend)
+        
+        # Ensure Apache log directories exist (fixes "Unable to open logs" error)
+        if not ensure_apache_log_dirs():
+            logger.warning("Failed to ensure Apache log directories, continuing anyway")
+        
+        # Ensure Apache has ServerName (fixes FQDN warning)
+        ensure_apache_servername()
         
         # Ensure PHP-FPM is running for the website's PHP version (or use mod_php fallback)
         php_result = ensure_php_fpm_running(website.php_version)
@@ -1038,7 +1114,7 @@ def enable_website(website: Website) -> Dict[str, any]:
         elif not php_result.get('success'):
             logger.warning(f"PHP-FPM check failed: {php_result.get('error', 'Unknown error')}, will use mod_php")
         
-        # Fix Apache ports.conf if needed
+        # Fix Apache ports.conf if needed (fixes "no listening sockets" error)
         if not fix_apache_ports_conf():
             logger.warning("Failed to fix Apache ports.conf, continuing anyway")
         
@@ -1113,11 +1189,32 @@ def enable_website(website: Website) -> Dict[str, any]:
                 logger.error("CRITICAL: Failed to enable mod_php. PHP files will not execute!")
                 return {'success': False, 'error': 'Neither PHP-FPM nor mod_php is available. PHP files cannot be processed.'}
         
+        # Ensure Apache can start - fix all prerequisites
+        # 1. Ensure log directories exist
+        if not ensure_apache_log_dirs():
+            logger.warning("Failed to ensure Apache log directories")
+        
+        # 2. Ensure ServerName is set
+        ensure_apache_servername()
+        
+        # 3. Ensure ports.conf is valid
+        if not fix_apache_ports_conf():
+            logger.error("Failed to fix Apache ports.conf")
+            return {'success': False, 'error': 'Apache ports.conf is invalid and could not be fixed'}
+        
         # Restart Apache instead of reload to ensure PHP handler is properly loaded
         # But first, verify config is still valid
         exit_code, stdout, stderr = run_command(['apache2ctl', 'configtest'], sudo=True)
         if exit_code != 0:
-            return {'success': False, 'error': f'Apache configuration invalid before restart: {stdout + stderr}'}
+            # Try one more time to fix
+            logger.warning("Apache config test failed, attempting final fix...")
+            ensure_apache_log_dirs()
+            ensure_apache_servername()
+            fix_apache_ports_conf()
+            
+            exit_code, stdout, stderr = run_command(['apache2ctl', 'configtest'], sudo=True)
+            if exit_code != 0:
+                return {'success': False, 'error': f'Apache configuration invalid before restart: {stdout + stderr}'}
         
         # Try to restart Apache
         exit_code, stdout, stderr = run_command(['systemctl', 'restart', 'apache2'], sudo=True)
@@ -1126,10 +1223,13 @@ def enable_website(website: Website) -> Dict[str, any]:
             exit_code2, stdout2, stderr2 = run_command(['systemctl', 'status', 'apache2'], sudo=True)
             status_output = stdout2 + stderr2
             
-            # Check Apache error log for details
+            # Check Apache error log for details (if it exists)
+            log_output = ""
             exit_code3, log_output, _ = run_command([
                 'tail', '-n', '20', '/var/log/apache2/error.log'
             ], sudo=True)
+            if exit_code3 != 0:
+                log_output = "Could not read error log"
             
             error_details = f"Status: {status_output}\n\nRecent errors: {log_output}"
             logger.error(f"Apache restart failed: {error_details}")

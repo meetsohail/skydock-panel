@@ -237,6 +237,7 @@ clone_repository() {
         else
             # Try HTTPS as fallback
             if sudo -u "$SKYDOCK_USER" -H bash -c "cd '$SKYDOCK_HOME' && git remote set-url origin '$REPO_URL_HTTPS' && git pull origin '$BRANCH'" >/dev/null 2>&1; then
+                :
             else
                 log_error "Failed to update repository. Please check:"
                 log_error "  1. Repository URL is correct"
@@ -254,6 +255,7 @@ clone_repository() {
         else
             # Try HTTPS as fallback
             if git clone -b "$BRANCH" "$REPO_URL_HTTPS" "$SKYDOCK_HOME" >/dev/null 2>&1; then
+                :
             else
                 log_error "Failed to clone repository. Please check:"
                 log_error "  1. Repository URL is correct"

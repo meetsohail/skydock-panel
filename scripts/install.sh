@@ -240,7 +240,7 @@ install_dependencies() {
     fi
     
     # Enable required Apache modules
-    a2enmod proxy proxy_http proxy_fcgi setenvif rewrite headers
+    a2enmod proxy proxy_http proxy_fcgi setenvif rewrite headers actions
     
     # Test Apache configuration
     if ! apache2ctl configtest >/dev/null 2>&1; then

@@ -572,8 +572,8 @@ def create_apache_config(website: Website) -> Dict[str, any]:
         AllowOverride All
         Require all granted
     </Directory>
-
-    # PHP-FPM handler configuration
+    
+    # PHP-FPM handler configuration - must be outside Directory block
     <FilesMatch \\.php$>
         SetHandler "proxy:unix:/var/run/php/php{php_version_clean}-fpm.sock|fcgi://localhost"
     </FilesMatch>
@@ -894,7 +894,7 @@ def ensure_php_fpm_running(php_version: str) -> Dict[str, any]:
                 run_command(['systemctl', 'enable', f'{service_name}.service'], sudo=True)
                 run_command(['systemctl', 'start', f'{service_name}.service'], sudo=True)
         
-        # Verify socket exists
+        # Verify socket exists and has correct permissions
         socket_path = f"/var/run/php/php{php_version_clean}-fpm.sock"
         exit_code, stdout, stderr = run_command(['test', '-S', socket_path], sudo=True)
         
@@ -902,6 +902,20 @@ def ensure_php_fpm_running(php_version: str) -> Dict[str, any]:
             logger.warning(f"PHP-FPM socket not found at {socket_path}. Service may need to be restarted.")
             # Try to restart the service
             run_command(['systemctl', 'restart', f'{service_name}.service'], sudo=True)
+            # Wait a moment for socket to be created
+            import time
+            time.sleep(2)
+            # Check again
+            exit_code, stdout, stderr = run_command(['test', '-S', socket_path], sudo=True)
+            if exit_code != 0:
+                logger.error(f"PHP-FPM socket still not found at {socket_path} after restart")
+                return {'success': False, 'error': f'PHP-FPM socket not found: {socket_path}'}
+        
+        # Ensure socket has correct permissions (www-data should be able to access it)
+        # PHP-FPM usually sets this correctly, but let's verify
+        exit_code, stdout, stderr = run_command(['ls', '-l', socket_path], sudo=True)
+        if exit_code == 0:
+            logger.info(f"PHP-FPM socket permissions: {stdout.strip()}")
         
         return {'success': True}
     except Exception as e:
@@ -943,9 +957,10 @@ def enable_website(website: Website) -> Dict[str, any]:
             else:
                 return {'success': False, 'error': f'Apache config test failed: {stderr}'}
         
-        exit_code, stdout, stderr = run_command(['systemctl', 'reload', 'apache2'], sudo=True)
+        # Restart Apache instead of reload to ensure PHP-FPM handler is properly loaded
+        exit_code, stdout, stderr = run_command(['systemctl', 'restart', 'apache2'], sudo=True)
         if exit_code != 0:
-            return {'success': False, 'error': f'Failed to reload Apache: {stderr}'}
+            return {'success': False, 'error': f'Failed to restart Apache: {stderr}'}
         
         # Enable Nginx site (reverse proxy)
         source = os.path.abspath(os.path.join(settings.SKYDOCK_NGINX_SITES_AVAILABLE, website.domain))

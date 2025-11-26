@@ -657,7 +657,21 @@ main() {
     fi
     log_info "=========================================="
     log_info ""
-    log_info "Access the panel at: http://$(hostname -I | awk '{print $1}')"
+    
+    # Get server IP
+    SERVER_IP=$(hostname -I | awk '{print $1}')
+    if [ -z "$SERVER_IP" ]; then
+        SERVER_IP="your-server-ip"
+    fi
+    
+    # Check if Nginx is serving the panel
+    if systemctl is-active --quiet nginx 2>/dev/null && [ -f /etc/nginx/sites-enabled/skydock-panel ]; then
+        log_info "Access the panel at: http://$SERVER_IP"
+        log_info "  (via Nginx on port 80)"
+    else
+        log_info "Access the panel at: http://$SERVER_IP:$SKYDOCK_PORT"
+        log_info "  (directly on port $SKYDOCK_PORT)"
+    fi
     log_info ""
     if [ "$is_update" = false ]; then
         log_info "Admin credentials:"

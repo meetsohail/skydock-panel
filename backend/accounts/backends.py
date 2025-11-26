@@ -57,9 +57,12 @@ class SystemUserBackend(BaseBackend):
                 
                 logger.info(f"Helper script exit code: {result.returncode}")
                 if result.stdout:
-                    logger.info(f"Helper script stdout: {result.stdout}")
+                    logger.info(f"Helper script stdout: {result.stdout.strip()}")
                 if result.stderr:
-                    logger.warning(f"Helper script stderr: {result.stderr}")
+                    logger.warning(f"Helper script stderr: {result.stderr.strip()}")
+                
+                # Log the actual command being run for debugging
+                logger.info(f"Ran: python3 {script_path} {username} <password>")
                 
                 if result.returncode == 0:
                     password_valid = True

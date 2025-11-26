@@ -2,17 +2,45 @@
 """
 Helper script to verify system user password.
 This script runs as a separate process to avoid TTY issues.
+Uses multiple methods to verify password.
 """
 import sys
 import pexpect
 import os
+import crypt
+import spwd
 
 if len(sys.argv) != 3:
+    sys.stderr.write("Usage: verify_password.py <username> <password>\n")
     sys.exit(1)
 
 username = sys.argv[1]
 password = sys.argv[2]
 
+# Method 1: Try using crypt with /etc/shadow (requires root or proper permissions)
+try:
+    shadow_entry = spwd.getspnam(username)
+    hashed = shadow_entry.sp_pwd
+    
+    # Skip locked accounts
+    if hashed in ['!', '*', 'x']:
+        sys.stderr.write("Account is locked\n")
+        sys.exit(1)
+    
+    # Verify using crypt
+    if crypt.crypt(password, hashed) == hashed:
+        sys.exit(0)
+    else:
+        sys.stderr.write("Password does not match (crypt method)\n")
+except (KeyError, PermissionError):
+    # User not in shadow or no permission - fall back to su method
+    sys.stderr.write("Cannot access shadow file, using su method\n")
+    pass
+except Exception as e:
+    sys.stderr.write(f"Crypt method error: {str(e)}\n")
+    pass
+
+# Method 2: Use su with pexpect (fallback)
 try:
     # Set environment
     env = os.environ.copy()
@@ -29,7 +57,7 @@ try:
         env=env
     )
     
-    # Wait for password prompt
+    # Wait for password prompt - try multiple patterns
     patterns = [
         'Password:',
         'password:',
@@ -39,26 +67,59 @@ try:
         pexpect.TIMEOUT
     ]
     
-    index = child.expect(patterns, timeout=15)
-    
-    # If we got EOF or TIMEOUT before prompt, fail
-    if index >= len(patterns) - 2:
-        child.close(force=True)
+    try:
+        index = child.expect(patterns, timeout=15)
+        
+        # If we got EOF or TIMEOUT before prompt, fail
+        if index >= len(patterns) - 2:
+            sys.stderr.write(f"No password prompt found (index: {index})\n")
+            child.close(force=True)
+            sys.exit(1)
+        
+        # Send password
+        child.sendline(password)
+        
+        # Wait for command to complete
+        child.expect(pexpect.EOF, timeout=15)
+        
+        # Get exit status
+        exit_status = child.exitstatus
+        child.close()
+        
+        # Exit with su's exit status (0 = success, non-zero = failure)
+        if exit_status == 0:
+            sys.exit(0)
+        else:
+            sys.stderr.write(f"su command failed with exit status: {exit_status}\n")
+            sys.exit(1)
+            
+    except pexpect.TIMEOUT:
+        sys.stderr.write("Timeout waiting for password prompt or command completion\n")
+        try:
+            child.close(force=True)
+        except:
+            pass
         sys.exit(1)
-    
-    # Send password
-    child.sendline(password)
-    
-    # Wait for command to complete
-    child.expect(pexpect.EOF, timeout=15)
-    
-    # Get exit status
-    exit_status = child.exitstatus
-    child.close()
-    
-    # Exit with su's exit status
-    sys.exit(exit_status)
-    
+    except pexpect.EOF:
+        # Sometimes EOF happens but exit status is still valid
+        try:
+            exit_status = child.exitstatus
+            child.close()
+            if exit_status == 0:
+                sys.exit(0)
+            else:
+                sys.stderr.write(f"Unexpected EOF, exit status: {exit_status}\n")
+                sys.exit(1)
+        except:
+            sys.exit(1)
+    except Exception as e:
+        sys.stderr.write(f"Exception in pexpect: {str(e)}\n")
+        try:
+            child.close(force=True)
+        except:
+            pass
+        sys.exit(1)
+        
 except Exception as e:
+    sys.stderr.write(f"Error spawning su command: {str(e)}\n")
     sys.exit(1)
-

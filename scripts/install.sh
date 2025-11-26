@@ -143,6 +143,8 @@ install_dependencies() {
     apt-get update -qq
     
     log_info "Installing system dependencies..."
+    
+    # Install base packages
     apt-get install -y \
         git \
         curl \
@@ -156,33 +158,6 @@ install_dependencies() {
         mysql-client \
         nginx \
         apache2 \
-        php8.1-fpm \
-        php8.1-mysql \
-        php8.1-xml \
-        php8.1-mbstring \
-        php8.1-curl \
-        php8.1-zip \
-        php8.1-gd \
-        php8.1-cli \
-        php8.1-common \
-        php8.2-fpm \
-        php8.2-mysql \
-        php8.2-xml \
-        php8.2-mbstring \
-        php8.2-curl \
-        php8.2-zip \
-        php8.2-gd \
-        php8.2-cli \
-        php8.2-common \
-        php8.3-fpm \
-        php8.3-mysql \
-        php8.3-xml \
-        php8.3-mbstring \
-        php8.3-curl \
-        php8.3-zip \
-        php8.3-gd \
-        php8.3-cli \
-        php8.3-common \
         redis-server \
         ufw \
         software-properties-common \
@@ -190,6 +165,41 @@ install_dependencies() {
         ca-certificates \
         gnupg \
         lsb-release
+    
+    # Install PHP packages for available versions (some may not be available in all Ubuntu versions)
+    log_info "Installing PHP packages..."
+    for php_version in 8.1 8.2 8.3; do
+        if apt-cache show "php${php_version}-fpm" >/dev/null 2>&1; then
+            log_info "Installing PHP ${php_version} packages..."
+            apt-get install -y \
+                "php${php_version}-fpm" \
+                "php${php_version}-mysql" \
+                "php${php_version}-xml" \
+                "php${php_version}-mbstring" \
+                "php${php_version}-curl" \
+                "php${php_version}-zip" \
+                "php${php_version}-gd" \
+                "php${php_version}-cli" \
+                "php${php_version}-common" 2>/dev/null || log_warn "Some PHP ${php_version} packages failed to install"
+        else
+            log_warn "PHP ${php_version} packages not available in repository, skipping"
+        fi
+    done
+    
+    # Fallback: try to install generic php-fpm if version-specific ones aren't available
+    if ! systemctl list-unit-files | grep -q "php.*-fpm.service"; then
+        log_info "Installing generic PHP-FPM packages..."
+        apt-get install -y \
+            php-fpm \
+            php-mysql \
+            php-xml \
+            php-mbstring \
+            php-curl \
+            php-zip \
+            php-gd \
+            php-cli \
+            php-common 2>/dev/null || log_warn "Generic PHP packages failed to install"
+    fi
     
     log_info "System dependencies installed"
     
@@ -251,8 +261,35 @@ install_dependencies() {
     fi
     
     # Start and enable services
-    systemctl enable nginx apache2 php8.1-fpm php8.2-fpm php8.3-fpm
-    systemctl start nginx apache2 php8.1-fpm php8.2-fpm php8.3-fpm
+    systemctl enable nginx apache2
+    
+    # Enable and start PHP-FPM services that are installed
+    # Check which PHP-FPM services are available and enable/start them
+    for php_version in 8.1 8.2 8.3; do
+        service_name="php${php_version}-fpm"
+        if systemctl list-unit-files "${service_name}.service" 2>/dev/null | grep -q "${service_name}.service"; then
+            if systemctl enable "${service_name}" 2>/dev/null; then
+                log_info "PHP ${php_version}-FPM service enabled"
+            fi
+            if systemctl start "${service_name}" 2>/dev/null; then
+                log_info "PHP ${php_version}-FPM service started"
+            fi
+        else
+            log_warn "PHP ${php_version}-FPM service not found, skipping"
+        fi
+    done
+    
+    # Also try generic php-fpm if available
+    if systemctl list-unit-files "php-fpm.service" 2>/dev/null | grep -q "php-fpm.service"; then
+        if systemctl enable php-fpm 2>/dev/null; then
+            log_info "Generic PHP-FPM service enabled"
+        fi
+        if systemctl start php-fpm 2>/dev/null; then
+            log_info "Generic PHP-FPM service started"
+        fi
+    fi
+    
+    systemctl start nginx apache2
     
     log_info "Nginx and Apache configured"
 }

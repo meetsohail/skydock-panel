@@ -20,12 +20,15 @@ def generate_password(length: int = 16) -> str:
     return ''.join(secrets.choice(alphabet) for _ in range(length))
 
 
-def create_directory(path: str, owner_user: Optional[str] = None) -> bool:
+def create_directory(path: str, owner_user: Optional[str] = None) -> Dict[str, any]:
     """Create directory with proper permissions.
     
     Args:
         path: Directory path to create
         owner_user: Username to set as owner (defaults to www-data for web server access)
+    
+    Returns:
+        Dict with 'success' bool and optional 'error' message
     """
     try:
         # Ensure web root exists first
@@ -34,8 +37,9 @@ def create_directory(path: str, owner_user: Optional[str] = None) -> bool:
             logger.info(f"Creating web root directory: {web_root}")
             exit_code, stdout, stderr = run_command(['mkdir', '-p', web_root], sudo=True)
             if exit_code != 0:
-                logger.error(f"Failed to create web root {web_root}: {stderr}")
-                return False
+                error_msg = f"Failed to create web root {web_root}: {stderr}"
+                logger.error(error_msg)
+                return {'success': False, 'error': error_msg}
             # Set web root permissions
             run_command(['chown', '-R', 'www-data:www-data', web_root], sudo=True)
             run_command(['chmod', '755', web_root], sudo=True)
@@ -47,18 +51,36 @@ def create_directory(path: str, owner_user: Optional[str] = None) -> bool:
             # Try to create parent directory with sudo
             exit_code, stdout, stderr = run_command(['mkdir', '-p', parent_dir], sudo=True)
             if exit_code != 0:
-                logger.error(f"Failed to create parent directory {parent_dir}: {stderr}")
-                return False
+                error_msg = f"Failed to create parent directory {parent_dir}: {stderr}"
+                logger.error(error_msg)
+                return {'success': False, 'error': error_msg}
+            # Set parent directory ownership (we'll verify user exists later)
+            run_command(['chmod', '755', parent_dir], sudo=True)
         
         # Create the directory itself with sudo
         if not os.path.exists(path):
             logger.info(f"Creating directory: {path}")
             exit_code, stdout, stderr = run_command(['mkdir', '-p', path], sudo=True)
             if exit_code != 0:
-                logger.error(f"Failed to create directory {path}: {stderr}")
-                return False
+                error_msg = f"Failed to create directory {path}: {stderr}"
+                logger.error(error_msg)
+                return {'success': False, 'error': error_msg}
         else:
             logger.info(f"Directory already exists: {path}")
+        
+        # Verify owner_user exists if provided
+        if owner_user:
+            exit_code, stdout, stderr = run_command(['id', owner_user], sudo=False)
+            if exit_code != 0:
+                logger.warning(f"User {owner_user} does not exist, using www-data instead")
+                # Try to set parent directory ownership to www-data
+                if parent_dir and parent_dir != path:
+                    run_command(['chown', '-R', 'www-data:www-data', parent_dir], sudo=True)
+                owner_user = None
+            else:
+                # User exists, set parent directory ownership
+                if parent_dir and parent_dir != path:
+                    run_command(['chown', '-R', f'{owner_user}:www-data', parent_dir], sudo=True)
         
         # Set ownership - prefer owner_user if provided, otherwise use www-data
         if owner_user:
@@ -69,8 +91,8 @@ def create_directory(path: str, owner_user: Optional[str] = None) -> bool:
                 # Fallback to user:user if www-data group doesn't exist
                 exit_code, stdout, stderr = run_command(['chown', '-R', f'{owner_user}:{owner_user}', path], sudo=True)
                 if exit_code != 0:
-                    logger.error(f"Failed to chown directory {path} to {owner_user}: {stderr}")
-                    # Don't fail completely - try www-data as fallback
+                    logger.warning(f"Failed to chown directory {path} to {owner_user}: {stderr}, using www-data")
+                    # Final fallback to www-data
                     run_command(['chown', '-R', 'www-data:www-data', path], sudo=True)
         else:
             # Default: www-data ownership for web server
@@ -91,16 +113,19 @@ def create_directory(path: str, owner_user: Optional[str] = None) -> bool:
             # Don't fail on chmod errors, as ownership might be sufficient
         
         logger.info(f"Successfully created and configured directory: {path}")
-        return True
+        return {'success': True}
     except PermissionError as e:
-        logger.error(f"Permission denied creating directory {path}: {e}")
-        return False
+        error_msg = f"Permission denied creating directory {path}: {e}"
+        logger.error(error_msg)
+        return {'success': False, 'error': error_msg}
     except OSError as e:
-        logger.error(f"OS error creating directory {path}: {e}")
-        return False
+        error_msg = f"OS error creating directory {path}: {e}"
+        logger.error(error_msg)
+        return {'success': False, 'error': error_msg}
     except Exception as e:
-        logger.error(f"Error creating directory {path}: {e}", exc_info=True)
-        return False
+        error_msg = f"Error creating directory {path}: {e}"
+        logger.error(error_msg, exc_info=True)
+        return {'success': False, 'error': error_msg}
 
 
 def create_php_site(website: Website) -> Dict[str, any]:
@@ -108,8 +133,9 @@ def create_php_site(website: Website) -> Dict[str, any]:
     try:
         # Create document root with website owner as owner
         owner_username = website.user.username if website.user else None
-        if not create_directory(website.root_path, owner_user=owner_username):
-            return {'success': False, 'error': 'Failed to create document root'}
+        dir_result = create_directory(website.root_path, owner_user=owner_username)
+        if not dir_result['success']:
+            return {'success': False, 'error': dir_result.get('error', 'Failed to create document root')}
         
         # Create example index.php
         index_content = f"""<?php
@@ -154,8 +180,11 @@ def create_wordpress_site(website: Website, wp_email: str, wp_username: str, wp_
     try:
         # Create document root with website owner as owner
         owner_username = website.user.username if website.user else None
-        if not create_directory(website.root_path, owner_user=owner_username):
-            return {'success': False, 'error': 'Failed to create document root'}
+        dir_result = create_directory(website.root_path, owner_user=owner_username)
+        if not dir_result['success']:
+            error_msg = dir_result.get('error', 'Failed to create document root')
+            logger.error(f"Failed to create document root for WordPress site: {error_msg}")
+            return {'success': False, 'error': error_msg}
         
         # Create database and user
         db_name = f"wp_{website.domain.replace('.', '_').replace('-', '_')}"

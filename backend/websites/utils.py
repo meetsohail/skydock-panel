@@ -145,13 +145,32 @@ echo "<p>This is a PHP application managed by SkyDock Panel.</p>";
 phpinfo();
 """
         index_path = os.path.join(website.root_path, 'index.php')
-        with open(index_path, 'w') as f:
-            f.write(index_content)
         
-        # Set permissions (already set by create_directory, but ensure consistency)
-        owner_username = website.user.username if website.user else 'www-data'
-        run_command(['chown', '-R', f'{owner_username}:www-data', website.root_path], sudo=True)
-        run_command(['chmod', '-R', '755', website.root_path], sudo=True)
+        # Write to temporary file first, then copy with sudo to avoid permission issues
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.php') as tmp_file:
+            tmp_file.write(index_content)
+            tmp_file_path = tmp_file.name
+        
+        try:
+            # Copy temp file to destination with sudo
+            exit_code, stdout, stderr = run_command([
+                'cp', tmp_file_path, index_path
+            ], sudo=True)
+            
+            if exit_code != 0:
+                return {'success': False, 'error': f'Failed to create index.php: {stderr}'}
+            
+            # Set permissions (already set by create_directory, but ensure consistency)
+            owner_username = website.user.username if website.user else 'www-data'
+            run_command(['chown', '-R', f'{owner_username}:www-data', website.root_path], sudo=True)
+            run_command(['chmod', '-R', '755', website.root_path], sudo=True)
+        finally:
+            # Clean up temp file
+            try:
+                os.unlink(tmp_file_path)
+            except:
+                pass
         
         # Generate web server configuration - always use Apache with Nginx reverse proxy
         # Create Apache config first
@@ -446,10 +465,31 @@ def create_nginx_config(website: Website) -> Dict[str, any]:
 """
         config_path = os.path.join(settings.SKYDOCK_NGINX_SITES_AVAILABLE, website.domain)
         
-        with open(config_path, 'w') as f:
-            f.write(config_content)
+        # Write to temporary file first, then copy with sudo to avoid permission issues
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode='w', delete=False) as tmp_file:
+            tmp_file.write(config_content)
+            tmp_file_path = tmp_file.name
         
-        return {'success': True, 'config_path': config_path}
+        try:
+            # Copy temp file to destination with sudo
+            exit_code, stdout, stderr = run_command([
+                'cp', tmp_file_path, config_path
+            ], sudo=True)
+            
+            if exit_code != 0:
+                return {'success': False, 'error': f'Failed to create Nginx config: {stderr}'}
+            
+            # Set proper permissions
+            run_command(['chmod', '644', config_path], sudo=True)
+            
+            return {'success': True, 'config_path': config_path}
+        finally:
+            # Clean up temp file
+            try:
+                os.unlink(tmp_file_path)
+            except:
+                pass
     except Exception as e:
         logger.error(f"Error creating Nginx config: {e}")
         return {'success': False, 'error': str(e)}
@@ -475,10 +515,31 @@ def create_apache_config(website: Website) -> Dict[str, any]:
 """
         config_path = os.path.join(settings.SKYDOCK_APACHE_SITES_AVAILABLE, f"{website.domain}.conf")
         
-        with open(config_path, 'w') as f:
-            f.write(config_content)
+        # Write to temporary file first, then copy with sudo to avoid permission issues
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.conf') as tmp_file:
+            tmp_file.write(config_content)
+            tmp_file_path = tmp_file.name
         
-        return {'success': True, 'config_path': config_path}
+        try:
+            # Copy temp file to destination with sudo
+            exit_code, stdout, stderr = run_command([
+                'cp', tmp_file_path, config_path
+            ], sudo=True)
+            
+            if exit_code != 0:
+                return {'success': False, 'error': f'Failed to create Apache config: {stderr}'}
+            
+            # Set proper permissions
+            run_command(['chmod', '644', config_path], sudo=True)
+            
+            return {'success': True, 'config_path': config_path}
+        finally:
+            # Clean up temp file
+            try:
+                os.unlink(tmp_file_path)
+            except:
+                pass
     except Exception as e:
         logger.error(f"Error creating Apache config: {e}")
         return {'success': False, 'error': str(e)}
@@ -507,10 +568,31 @@ def create_nginx_reverse_proxy_config(website: Website) -> Dict[str, any]:
 """
         config_path = os.path.join(settings.SKYDOCK_NGINX_SITES_AVAILABLE, website.domain)
         
-        with open(config_path, 'w') as f:
-            f.write(config_content)
+        # Write to temporary file first, then copy with sudo to avoid permission issues
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode='w', delete=False) as tmp_file:
+            tmp_file.write(config_content)
+            tmp_file_path = tmp_file.name
         
-        return {'success': True, 'config_path': config_path}
+        try:
+            # Copy temp file to destination with sudo
+            exit_code, stdout, stderr = run_command([
+                'cp', tmp_file_path, config_path
+            ], sudo=True)
+            
+            if exit_code != 0:
+                return {'success': False, 'error': f'Failed to create Nginx reverse proxy config: {stderr}'}
+            
+            # Set proper permissions
+            run_command(['chmod', '644', config_path], sudo=True)
+            
+            return {'success': True, 'config_path': config_path}
+        finally:
+            # Clean up temp file
+            try:
+                os.unlink(tmp_file_path)
+            except:
+                pass
     except Exception as e:
         logger.error(f"Error creating Nginx reverse proxy config: {e}")
         return {'success': False, 'error': str(e)}

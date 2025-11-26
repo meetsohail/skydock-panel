@@ -175,11 +175,60 @@ install_dependencies() {
     
     # Configure Apache to listen on port 8080 for reverse proxy
     log_info "Configuring Apache for reverse proxy..."
-    sed -i 's/Listen 80/Listen 8080/' /etc/apache2/ports.conf
-    sed -i 's/<VirtualHost \*:80>/<VirtualHost *:8080>/' /etc/apache2/sites-available/000-default.conf 2>/dev/null || true
+    
+    # Backup ports.conf
+    if [ ! -f /etc/apache2/ports.conf.bak ]; then
+        cp /etc/apache2/ports.conf /etc/apache2/ports.conf.bak
+    fi
+    
+    # Update ports.conf to listen on 8080 instead of 80
+    # Use a safer approach: comment out Listen 80 and ensure Listen 8080 exists
+    sed -i 's/^Listen 80$/#Listen 80/' /etc/apache2/ports.conf
+    sed -i 's/^[[:space:]]*Listen[[:space:]]*80[[:space:]]*$/#Listen 80/' /etc/apache2/ports.conf
+    
+    # Check if Listen 8080 already exists (exact match on its own line)
+    if ! grep -qE '^[[:space:]]*Listen[[:space:]]*8080[[:space:]]*$' /etc/apache2/ports.conf; then
+        # Add Listen 8080 after any existing Listen directives or at the top
+        if grep -qE '^[[:space:]]*Listen' /etc/apache2/ports.conf; then
+            # Find the line number of the first Listen directive and add after it
+            first_listen_line=$(grep -nE '^[[:space:]]*Listen' /etc/apache2/ports.conf | head -1 | cut -d: -f1)
+            if [ -n "$first_listen_line" ]; then
+                sed -i "${first_listen_line}a Listen 8080" /etc/apache2/ports.conf
+            else
+                # Fallback: add at the top
+                sed -i '1i Listen 8080' /etc/apache2/ports.conf
+            fi
+        else
+            # No Listen directives exist, add at the top
+            sed -i '1i Listen 8080' /etc/apache2/ports.conf
+        fi
+    fi
+    
+    # Update default site if it exists
+    if [ -f /etc/apache2/sites-available/000-default.conf ]; then
+        sed -i 's/<VirtualHost[[:space:]]*\*:80>/<VirtualHost *:8080>/' /etc/apache2/sites-available/000-default.conf 2>/dev/null || true
+    fi
     
     # Enable required Apache modules
     a2enmod proxy proxy_http rewrite headers
+    
+    # Test Apache configuration
+    if ! apache2ctl configtest >/dev/null 2>&1; then
+        log_warn "Apache config test failed, trying simpler configuration..."
+        # Restore backup and use simplest approach
+        cp /etc/apache2/ports.conf.bak /etc/apache2/ports.conf
+        # Comment out all Listen 80 lines
+        sed -i 's/^Listen 80/#Listen 80/' /etc/apache2/ports.conf
+        # Simply append Listen 8080 if it doesn't exist
+        if ! grep -qE '^[[:space:]]*Listen[[:space:]]*8080' /etc/apache2/ports.conf; then
+            echo "" >> /etc/apache2/ports.conf
+            echo "Listen 8080" >> /etc/apache2/ports.conf
+        fi
+        # Test again
+        if ! apache2ctl configtest >/dev/null 2>&1; then
+            log_error "Apache configuration is invalid. Please check /etc/apache2/ports.conf manually."
+        fi
+    fi
     
     # Start and enable services
     systemctl enable nginx apache2

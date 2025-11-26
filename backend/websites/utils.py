@@ -669,10 +669,97 @@ def install_wp_cli() -> Dict[str, any]:
         return {'success': False, 'error': str(e)}
 
 
+def fix_apache_ports_conf() -> bool:
+    """Ensure Apache ports.conf is valid with Listen 8080."""
+    try:
+        ports_conf_path = '/etc/apache2/ports.conf'
+        
+        # Read current ports.conf
+        exit_code, stdout, stderr = run_command(['cat', ports_conf_path], sudo=True)
+        if exit_code != 0:
+            logger.error(f"Failed to read ports.conf: {stderr}")
+            return False
+        
+        content = stdout
+        
+        # Check if Listen 8080 exists
+        if 'Listen 8080' not in content:
+            # Remove any malformed Listen lines and add proper one
+            import tempfile
+            import re
+            
+            # Remove lines that might be malformed (Listen without proper format)
+            lines = content.split('\n')
+            fixed_lines = []
+            listen_8080_exists = False
+            
+            for line in lines:
+                # Skip malformed Listen lines (like "Listen 8080Listen 80")
+                if re.match(r'^Listen\s+8080', line.strip()):
+                    if not listen_8080_exists:
+                        fixed_lines.append('Listen 8080')
+                        listen_8080_exists = True
+                elif re.match(r'^Listen\s+80\s*$', line.strip()):
+                    # Skip Listen 80
+                    continue
+                elif 'Listen 8080' in line and 'Listen 80' in line:
+                    # Skip malformed combined lines
+                    if not listen_8080_exists:
+                        fixed_lines.append('Listen 8080')
+                        listen_8080_exists = True
+                else:
+                    fixed_lines.append(line)
+            
+            # Add Listen 8080 if it doesn't exist
+            if not listen_8080_exists:
+                # Find a good place to insert it (after comments, before other Listen directives)
+                insert_pos = 0
+                for i, line in enumerate(fixed_lines):
+                    if line.strip().startswith('Listen'):
+                        insert_pos = i
+                        break
+                    if line.strip() and not line.strip().startswith('#'):
+                        insert_pos = i + 1
+                
+                fixed_lines.insert(insert_pos, 'Listen 8080')
+            
+            # Write fixed content to temp file
+            with tempfile.NamedTemporaryFile(mode='w', delete=False) as tmp_file:
+                tmp_file.write('\n'.join(fixed_lines))
+                tmp_file_path = tmp_file.name
+            
+            try:
+                # Copy to destination with sudo
+                exit_code, stdout, stderr = run_command([
+                    'cp', tmp_file_path, ports_conf_path
+                ], sudo=True)
+                
+                if exit_code != 0:
+                    logger.error(f"Failed to fix ports.conf: {stderr}")
+                    return False
+                
+                run_command(['chmod', '644', ports_conf_path], sudo=True)
+                return True
+            finally:
+                try:
+                    os.unlink(tmp_file_path)
+                except:
+                    pass
+        
+        return True
+    except Exception as e:
+        logger.error(f"Error fixing Apache ports.conf: {e}")
+        return False
+
+
 def enable_website(website: Website) -> Dict[str, any]:
     """Enable website by creating symlinks and reloading web servers (Nginx + Apache)."""
     try:
         # Always enable both Nginx (reverse proxy) and Apache (backend)
+        
+        # Fix Apache ports.conf if needed
+        if not fix_apache_ports_conf():
+            logger.warning("Failed to fix Apache ports.conf, continuing anyway")
         
         # Enable Apache site
         exit_code, stdout, stderr = run_command([
@@ -685,7 +772,14 @@ def enable_website(website: Website) -> Dict[str, any]:
         # Test and reload Apache
         exit_code, stdout, stderr = run_command(['apache2ctl', 'configtest'], sudo=True)
         if exit_code != 0:
-            return {'success': False, 'error': f'Apache config test failed: {stderr}'}
+            # Try to fix ports.conf and retry
+            logger.warning(f"Apache config test failed, attempting to fix ports.conf: {stderr}")
+            if fix_apache_ports_conf():
+                exit_code, stdout, stderr = run_command(['apache2ctl', 'configtest'], sudo=True)
+                if exit_code != 0:
+                    return {'success': False, 'error': f'Apache config test failed after fix attempt: {stderr}'}
+            else:
+                return {'success': False, 'error': f'Apache config test failed: {stderr}'}
         
         exit_code, stdout, stderr = run_command(['systemctl', 'reload', 'apache2'], sudo=True)
         if exit_code != 0:

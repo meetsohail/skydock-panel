@@ -2,7 +2,7 @@
 
 ## Quick Installation
 
-Once the repository is published to GitHub, you can install with:
+Install SkyDock Panel with a single command:
 
 ```bash
 wget -O install.sh https://raw.githubusercontent.com/meetsohail/skydock-panel/master/scripts/install.sh && bash install.sh
@@ -65,7 +65,7 @@ After installation completes, you'll see:
 
 If you get a 404 error, it means:
 1. The repository hasn't been published to GitHub yet, OR
-2. The branch name is different (try `master` instead of `main`)
+2. The repository URL is incorrect
 
 **Solution**: Use manual installation method above.
 

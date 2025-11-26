@@ -18,7 +18,7 @@ SKYDOCK_USER="skydock"
 SKYDOCK_HOME="/opt/skydock-panel"
 SKYDOCK_PORT="8080"
 REPO_URL="https://github.com/meetsohail/skydock-panel.git"
-BRANCH="main"
+BRANCH="master"
 
 # Functions
 log_info() {

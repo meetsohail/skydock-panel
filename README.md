@@ -49,10 +49,6 @@ A modern, self-hosted VPS management panel that allows you to manage your server
 Install SkyDock Panel on a fresh Ubuntu server with a single command:
 
 ```bash
-# For main branch:
-wget -O install.sh https://raw.githubusercontent.com/meetsohail/skydock-panel/main/scripts/install.sh && bash install.sh
-
-# Or for master branch:
 wget -O install.sh https://raw.githubusercontent.com/meetsohail/skydock-panel/master/scripts/install.sh && bash install.sh
 ```
 

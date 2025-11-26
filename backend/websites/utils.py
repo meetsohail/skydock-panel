@@ -1105,6 +1105,100 @@ def ensure_apache_servername() -> bool:
         return False
 
 
+def diagnose_apache_startup_failure() -> Dict[str, any]:
+    """Diagnose why Apache fails to start even when configtest passes."""
+    diagnostics = {
+        'ports_conf_valid': False,
+        'listen_8080_exists': False,
+        'log_dir_writable': False,
+        'port_8080_available': True,
+        'errors': []
+    }
+    
+    try:
+        # Check ports.conf
+        exit_code, stdout, stderr = run_command(['cat', '/etc/apache2/ports.conf'], sudo=True)
+        if exit_code == 0:
+            diagnostics['ports_conf_valid'] = True
+            import re
+            if re.search(r'^[[:space:]]*[Ll]isten[[:space:]]+8080', stdout, re.MULTILINE):
+                diagnostics['listen_8080_exists'] = True
+            else:
+                diagnostics['errors'].append("ports.conf does not contain 'Listen 8080'")
+        else:
+            diagnostics['errors'].append(f"Cannot read ports.conf: {stderr}")
+        
+        # Check log directory
+        exit_code, stdout, stderr = run_command(['test', '-w', '/var/log/apache2'], sudo=True)
+        if exit_code == 0:
+            diagnostics['log_dir_writable'] = True
+        else:
+            diagnostics['errors'].append("Apache log directory is not writable")
+        
+        # Check if port 8080 is in use
+        exit_code, stdout, stderr = run_command(['ss', '-tuln'], sudo=True)
+        if exit_code == 0 and ':8080' in stdout:
+            diagnostics['port_8080_available'] = False
+            diagnostics['errors'].append("Port 8080 is already in use")
+        
+    except Exception as e:
+        diagnostics['errors'].append(f"Diagnostic error: {str(e)}")
+    
+    return diagnostics
+
+
+def diagnose_apache_startup_failure() -> Dict[str, any]:
+    """Diagnose why Apache fails to start even when configtest passes."""
+    diagnostics = {
+        'ports_conf_valid': False,
+        'listen_8080_exists': False,
+        'log_dir_writable': False,
+        'port_8080_available': True,
+        'errors': []
+    }
+    
+    try:
+        # Check ports.conf
+        exit_code, stdout, stderr = run_command(['cat', '/etc/apache2/ports.conf'], sudo=True)
+        if exit_code == 0:
+            diagnostics['ports_conf_valid'] = True
+            import re
+            if re.search(r'^[[:space:]]*[Ll]isten[[:space:]]+8080', stdout, re.MULTILINE):
+                diagnostics['listen_8080_exists'] = True
+            else:
+                diagnostics['errors'].append("ports.conf does not contain 'Listen 8080'")
+        else:
+            diagnostics['errors'].append(f"Cannot read ports.conf: {stderr}")
+        
+        # Check log directory
+        exit_code, stdout, stderr = run_command(['test', '-w', '/var/log/apache2'], sudo=True)
+        if exit_code == 0:
+            diagnostics['log_dir_writable'] = True
+        else:
+            diagnostics['errors'].append("Apache log directory is not writable")
+        
+        # Check if port 8080 is in use
+        exit_code, stdout, stderr = run_command(['ss', '-tuln'], sudo=True)
+        if exit_code == 0 and ':8080' in stdout:
+            diagnostics['port_8080_available'] = False
+            diagnostics['errors'].append("Port 8080 is already in use")
+        
+        # Try to get systemd status
+        exit_code, stdout, stderr = run_command(['systemctl', 'status', 'apache2', '--no-pager', '-l'], sudo=True)
+        if exit_code != 0:
+            diagnostics['errors'].append(f"Systemd status: {stdout + stderr}")
+        
+        # Try to get journal logs
+        exit_code, stdout, stderr = run_command(['journalctl', '-u', 'apache2.service', '-n', '10', '--no-pager'], sudo=True)
+        if exit_code == 0:
+            diagnostics['journal_logs'] = stdout
+        
+    except Exception as e:
+        diagnostics['errors'].append(f"Diagnostic error: {str(e)}")
+    
+    return diagnostics
+
+
 def enable_website(website: Website) -> Dict[str, any]:
     """Enable website by creating symlinks and reloading web servers (Nginx + Apache)."""
     try:
@@ -1229,21 +1323,60 @@ def enable_website(website: Website) -> Dict[str, any]:
         # Try to restart Apache
         exit_code, stdout, stderr = run_command(['systemctl', 'restart', 'apache2'], sudo=True)
         if exit_code != 0:
+            # Run diagnostics first
+            diagnostics = diagnose_apache_startup_failure()
+            
             # Get more details about the failure
-            exit_code2, stdout2, stderr2 = run_command(['systemctl', 'status', 'apache2'], sudo=True)
+            exit_code2, stdout2, stderr2 = run_command(['systemctl', 'status', 'apache2', '--no-pager', '-l'], sudo=True)
             status_output = stdout2 + stderr2
             
-            # Check Apache error log for details (if it exists)
-            log_output = ""
-            exit_code3, log_output, _ = run_command([
-                'tail', '-n', '20', '/var/log/apache2/error.log'
+            # Get journalctl output
+            exit_code3, journal_output, _ = run_command([
+                'journalctl', '-u', 'apache2.service', '-n', '30', '--no-pager'
             ], sudo=True)
-            if exit_code3 != 0:
-                log_output = "Could not read error log"
             
-            error_details = f"Status: {status_output}\n\nRecent errors: {log_output}"
+            # Try starting with apache2ctl directly to see immediate errors
+            apache2ctl_output = ""
+            exit_code6, apache2ctl_output, _ = run_command([
+                'apache2ctl', 'start'
+            ], sudo=True)
+            
+            # Try to fix common issues automatically
+            fixes_applied = []
+            if not diagnostics.get('listen_8080_exists'):
+                logger.warning("Listen 8080 missing, attempting to fix...")
+                if fix_apache_ports_conf():
+                    fixes_applied.append("Fixed ports.conf")
+                    # Try starting again
+                    exit_code, _, _ = run_command(['systemctl', 'start', 'apache2'], sudo=True)
+                    if exit_code == 0:
+                        logger.info("Apache started after fixing ports.conf")
+                        return {'success': True}
+            
+            if not diagnostics.get('log_dir_writable'):
+                logger.warning("Log directory not writable, attempting to fix...")
+                if ensure_apache_log_dirs():
+                    fixes_applied.append("Fixed log directory")
+                    # Try starting again
+                    exit_code, _, _ = run_command(['systemctl', 'start', 'apache2'], sudo=True)
+                    if exit_code == 0:
+                        logger.info("Apache started after fixing log directory")
+                        return {'success': True}
+            
+            # Build comprehensive error message
+            error_parts = [
+                f"Diagnostics: {diagnostics}",
+                f"Systemd Status:\n{status_output}",
+                f"Journal Logs:\n{journal_output}",
+                f"Apache2ctl Output:\n{apache2ctl_output}"
+            ]
+            
+            if fixes_applied:
+                error_parts.append(f"Fixes applied (but still failed): {', '.join(fixes_applied)}")
+            
+            error_details = "\n\n".join(error_parts)
             logger.error(f"Apache restart failed: {error_details}")
-            return {'success': False, 'error': f'Failed to restart Apache. Check logs: {error_details}'}
+            return {'success': False, 'error': f'Failed to restart Apache. {error_details}'}
         
         # Wait a moment and verify Apache is running
         import time

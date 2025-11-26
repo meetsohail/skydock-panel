@@ -400,22 +400,63 @@ install_dependencies() {
     
     # Final Apache config test and start
     log_info "Final Apache configuration test..."
-    if apache2ctl configtest >/dev/null 2>&1; then
+    config_test_output=$(apache2ctl configtest 2>&1)
+    config_test_exit=$?
+    
+    if [ $config_test_exit -eq 0 ]; then
+        log_info "Apache configuration syntax is valid"
+        
+        # Start Nginx first
         systemctl start nginx
+        
+        # Try to start Apache
         if systemctl start apache2; then
             log_info "Apache started successfully"
         else
-            log_error "Failed to start Apache. Check configuration with: apache2ctl configtest"
-            log_error "View errors with: journalctl -xeu apache2.service"
-            # Try to diagnose the issue
-            config_error=$(apache2ctl configtest 2>&1)
-            log_error "Apache config error: $config_error"
+            log_error "Failed to start Apache even though config test passed"
+            
+            # Get detailed error information
+            log_error "=== Apache Service Status ==="
+            systemctl status apache2 --no-pager -l || true
+            
+            log_error "=== Recent Apache Errors ==="
+            journalctl -u apache2.service -n 20 --no-pager || true
+            
+            log_error "=== Checking for common issues ==="
+            
+            # Check if port 8080 is in use
+            if netstat -tuln 2>/dev/null | grep -q ':8080 ' || ss -tuln 2>/dev/null | grep -q ':8080 '; then
+                log_warn "Port 8080 is already in use"
+                netstat -tuln 2>/dev/null | grep ':8080 ' || ss -tuln 2>/dev/null | grep ':8080 ' || true
+            fi
+            
+            # Check log directory permissions
+            if [ ! -w /var/log/apache2 ]; then
+                log_error "Apache log directory is not writable"
+                ls -ld /var/log/apache2 || true
+            fi
+            
+            # Check if ports.conf has Listen directive
+            if ! grep -qE '^[[:space:]]*Listen[[:space:]]+8080' /etc/apache2/ports.conf; then
+                log_error "ports.conf does not contain 'Listen 8080'"
+                log_info "Fixing ports.conf..."
+                echo "Listen 8080" | sudo tee /etc/apache2/ports.conf > /dev/null
+                if systemctl start apache2; then
+                    log_info "Apache started after fixing ports.conf"
+                else
+                    log_error "Apache still failed to start after fixing ports.conf"
+                fi
+            fi
+            
+            # Try starting with apache2ctl directly to see errors
+            log_info "Attempting to start Apache with apache2ctl to see errors..."
+            apache2ctl start 2>&1 || true
+            
             # Continue installation but Apache won't be running
         fi
     else
-        config_error=$(apache2ctl configtest 2>&1)
-        log_error "Apache configuration is invalid. Cannot start Apache."
-        log_error "Config test output: $config_error"
+        log_error "Apache configuration is invalid."
+        log_error "Config test output: $config_test_output"
         log_error "Run 'apache2ctl configtest' to see errors."
         # Start Nginx anyway
         systemctl start nginx

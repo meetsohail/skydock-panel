@@ -3,11 +3,17 @@ Custom authentication backend for system user authentication.
 """
 import pwd
 import pexpect
+import subprocess
 import logging
+import os
+import tempfile
 from django.contrib.auth.backends import BaseBackend
 from django.contrib.auth import get_user_model
 
 logger = logging.getLogger(__name__)
+
+# Enable info level logging for debugging
+logging.basicConfig(level=logging.INFO)
 
 
 class SystemUserBackend(BaseBackend):
@@ -25,20 +31,30 @@ class SystemUserBackend(BaseBackend):
             pwd_entry = pwd.getpwnam(username)
         except KeyError:
             # User doesn't exist in system
-            logger.debug(f"User {username} not found in system")
+            logger.warning(f"User {username} not found in system")
             return None
         
         # Verify password using pexpect with su
         password_valid = False
+        
         try:
-            # Use su to verify password
+            # Method: Use pexpect with su command
+            # Set environment to ensure proper locale
+            env = os.environ.copy()
+            env['LANG'] = 'C'
+            env['LC_ALL'] = 'C'
+            
             child = pexpect.spawn(
                 'su',
                 ['-c', 'exit 0', username],
-                timeout=10,
+                timeout=15,
                 encoding='utf-8',
-                echo=False
+                echo=False,
+                env=env
             )
+            
+            # Log what we're doing
+            logger.info(f"Attempting to authenticate user: {username}")
             
             # Wait for password prompt - try multiple patterns
             patterns = [
@@ -46,76 +62,102 @@ class SystemUserBackend(BaseBackend):
                 'password:',
                 'Password for',
                 'password for',
+                'su:',
                 pexpect.EOF,
                 pexpect.TIMEOUT
             ]
             
-            index = child.expect(patterns, timeout=10)
-            
-            # If we got EOF or TIMEOUT before prompt, authentication failed
-            if index >= len(patterns) - 2:  # EOF or TIMEOUT
-                logger.debug(f"No password prompt for user {username}")
-                child.close(force=True)
-                return None
-            
-            # Send password
-            child.sendline(password)
-            
-            # Wait for command to complete
-            child.expect(pexpect.EOF, timeout=10)
-            
-            # Get exit status before closing
-            exit_status = child.exitstatus
-            child.close()
-            
-            if exit_status == 0:
-                password_valid = True
-                logger.debug(f"Password verified successfully for user {username}")
-            else:
-                logger.debug(f"Password verification failed for user {username} (exit: {exit_status})")
-                
-        except pexpect.TIMEOUT:
-            logger.debug(f"Timeout during password verification for user {username}")
             try:
-                child.close(force=True)
-            except:
-                pass
-            return None
-        except pexpect.EOF:
-            logger.debug(f"Unexpected EOF during password verification for user {username}")
-            return None
+                index = child.expect(patterns, timeout=15)
+                logger.info(f"Matched pattern index: {index}")
+                
+                # If we got EOF or TIMEOUT before prompt, authentication failed
+                if index >= len(patterns) - 2:  # EOF or TIMEOUT
+                    logger.warning(f"No password prompt for user {username} (got EOF/TIMEOUT)")
+                    child.close(force=True)
+                    return None
+                
+                # Send password
+                child.sendline(password)
+                
+                # Wait for command to complete
+                child.expect(pexpect.EOF, timeout=15)
+                
+                # Get exit status before closing
+                exit_status = child.exitstatus
+                child.close()
+                
+                logger.info(f"su command exit status: {exit_status}")
+                
+                if exit_status == 0:
+                    password_valid = True
+                    logger.info(f"Password verified successfully for user {username}")
+                else:
+                    logger.warning(f"Password verification failed for user {username} (exit: {exit_status})")
+                    
+            except pexpect.TIMEOUT as e:
+                logger.warning(f"Timeout during password verification for user {username}: {e}")
+                try:
+                    child.close(force=True)
+                except:
+                    pass
+                return None
+            except pexpect.EOF as e:
+                logger.warning(f"Unexpected EOF during password verification for user {username}: {e}")
+                try:
+                    exit_status = child.exitstatus
+                    if exit_status == 0:
+                        password_valid = True
+                    child.close(force=True)
+                except:
+                    pass
+                if not password_valid:
+                    return None
+            except Exception as e:
+                logger.error(f"Exception during expect: {e}")
+                try:
+                    child.close(force=True)
+                except:
+                    pass
+                return None
+                
         except Exception as e:
-            logger.error(f"Error during password verification for user {username}: {e}")
+            logger.error(f"Error during password verification for user {username}: {e}", exc_info=True)
             return None
         
         if password_valid:
             # Password is correct, get or create Django user
             User = get_user_model()
-            user, created = User.objects.get_or_create(
-                username=username,
-                defaults={
-                    'is_active': True,
-                    'is_staff': False,
-                    'is_superuser': False,
-                }
-            )
-            # Update user info from system
             try:
-                if not user.email:
-                    # Try to set email from GECOS field if available
-                    gecos = pwd_entry.pw_gecos.split(',')[0] if pwd_entry.pw_gecos else ''
-                    if '@' in gecos:
-                        user.email = gecos
-                    else:
-                        # Set a default email based on username
-                        user.email = f"{username}@localhost"
-                user.save()
+                user, created = User.objects.get_or_create(
+                    username=username,
+                    defaults={
+                        'is_active': True,
+                        'is_staff': False,
+                        'is_superuser': False,
+                    }
+                )
+                # Update user info from system
+                try:
+                    if not user.email:
+                        # Try to set email from GECOS field if available
+                        gecos = pwd_entry.pw_gecos.split(',')[0] if pwd_entry.pw_gecos else ''
+                        if '@' in gecos:
+                            user.email = gecos
+                        else:
+                            # Set a default email based on username
+                            user.email = f"{username}@localhost"
+                    user.save()
+                except Exception as e:
+                    logger.debug(f"Error updating user info: {e}")
+                
+                logger.info(f"User {username} authenticated successfully")
+                return user
             except Exception as e:
-                logger.debug(f"Error updating user info: {e}")
-            
-            logger.info(f"User {username} authenticated successfully")
-            return user
+                logger.error(f"Error creating/getting user: {e}")
+                return None
         
+        logger.warning(f"Authentication failed for user {username}")
         return None
     
     def get_user(self, user_id):

@@ -309,14 +309,29 @@ install_dependencies() {
         sed -i 's/<VirtualHost[[:space:]]*\*:80>/<VirtualHost *:8080>/' /etc/apache2/sites-available/000-default.conf 2>/dev/null || true
     fi
     
-    # Enable required Apache modules
-    a2enmod proxy proxy_http proxy_fcgi setenvif rewrite headers actions
+    # Enable required Apache modules (only if they exist)
+    log_info "Enabling Apache modules..."
+    for module in proxy proxy_http proxy_fcgi setenvif rewrite headers actions; do
+        if a2enmod "$module" 2>/dev/null; then
+            log_info "Enabled Apache module: $module"
+        else
+            log_warn "Failed to enable Apache module: $module (may not be available)"
+        fi
+    done
     
     # Test Apache configuration
+    log_info "Testing Apache configuration..."
     if ! apache2ctl configtest >/dev/null 2>&1; then
         log_warn "Apache config test failed, trying simpler configuration..."
+        # Get the actual error
+        config_error=$(apache2ctl configtest 2>&1)
+        log_warn "Apache config error: $config_error"
+        
         # Restore backup and use simplest approach
-        cp /etc/apache2/ports.conf.bak /etc/apache2/ports.conf
+        if [ -f /etc/apache2/ports.conf.bak ]; then
+            cp /etc/apache2/ports.conf.bak /etc/apache2/ports.conf
+        fi
+        
         # Comment out all Listen 80 lines
         sed -i 's/^Listen 80/#Listen 80/' /etc/apache2/ports.conf
         # Simply append Listen 8080 if it doesn't exist
@@ -324,10 +339,19 @@ install_dependencies() {
             echo "" >> /etc/apache2/ports.conf
             echo "Listen 8080" >> /etc/apache2/ports.conf
         fi
+        
         # Test again
         if ! apache2ctl configtest >/dev/null 2>&1; then
-            log_error "Apache configuration is invalid. Please check /etc/apache2/ports.conf manually."
+            config_error2=$(apache2ctl configtest 2>&1)
+            log_error "Apache configuration is still invalid after fix attempt."
+            log_error "Error details: $config_error2"
+            log_error "Please check /etc/apache2/ports.conf and /etc/apache2/sites-enabled/ manually."
+            # Don't exit - continue installation but warn user
+        else
+            log_info "Apache configuration fixed successfully"
         fi
+    else
+        log_info "Apache configuration test passed"
     fi
     
     # Start and enable services
@@ -359,7 +383,22 @@ install_dependencies() {
         fi
     fi
     
-    systemctl start nginx apache2
+    # Start services - test Apache config first
+    if apache2ctl configtest >/dev/null 2>&1; then
+        systemctl start nginx
+        if systemctl start apache2; then
+            log_info "Apache started successfully"
+        else
+            log_error "Failed to start Apache. Check configuration with: apache2ctl configtest"
+            log_error "View errors with: journalctl -xeu apache2.service"
+            # Continue installation but Apache won't be running
+        fi
+    else
+        log_error "Apache configuration is invalid. Cannot start Apache."
+        log_error "Run 'apache2ctl configtest' to see errors."
+        # Start Nginx anyway
+        systemctl start nginx
+    fi
     
     log_info "Nginx and Apache configured"
 }

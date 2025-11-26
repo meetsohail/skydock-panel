@@ -602,12 +602,19 @@ def create_apache_config(website: Website) -> Dict[str, any]:
         # Build PHP handler configuration
         if use_php_fpm:
             # Use PHP-FPM - explicitly set handler
-            php_handler = f"""    # PHP-FPM handler configuration
+            # Verify socket exists before using it
+            exit_code, stdout, stderr = run_command(['test', '-S', php_fpm_socket], sudo=True)
+            if exit_code != 0:
+                logger.warning(f"PHP-FPM socket {php_fpm_socket} not found, falling back to mod_php")
+                use_php_fpm = False
+            else:
+                php_handler = f"""    # PHP-FPM handler configuration
     <FilesMatch \\.php$>
         SetHandler "proxy:unix:{php_fpm_socket}|fcgi://localhost"
     </FilesMatch>"""
-            logger.info(f"Using PHP-FPM for {website.domain} (socket: {php_fpm_socket})")
-        else:
+                logger.info(f"Using PHP-FPM for {website.domain} (socket: {php_fpm_socket})")
+        
+        if not use_php_fpm:
             # Use mod_php (fallback) - DO NOT set a handler, let mod_php handle it automatically
             # mod_php automatically processes .php files when the module is loaded
             php_handler = """    # Using mod_php (PHP-FPM not available)
@@ -687,6 +694,15 @@ def create_apache_config(website: Website) -> Dict[str, any]:
             
             # Set proper permissions
             run_command(['chmod', '644', config_path], sudo=True)
+            
+            # Validate the configuration file syntax
+            exit_code, stdout, stderr = run_command(['apache2ctl', 'configtest'], sudo=True)
+            if exit_code != 0:
+                # Remove the invalid config file
+                run_command(['rm', '-f', config_path], sudo=True)
+                error_msg = f'Apache configuration is invalid: {stdout + stderr}'
+                logger.error(error_msg)
+                return {'success': False, 'error': error_msg}
             
             return {'success': True, 'config_path': config_path}
         finally:
@@ -1034,17 +1050,29 @@ def enable_website(website: Website) -> Dict[str, any]:
         if exit_code != 0:
             return {'success': False, 'error': f'Failed to enable Apache site: {stderr}'}
         
-        # Test and reload Apache
+        # Test Apache configuration BEFORE restarting
         exit_code, stdout, stderr = run_command(['apache2ctl', 'configtest'], sudo=True)
         if exit_code != 0:
+            # Get full error output
+            exit_code2, stdout2, stderr2 = run_command(['apache2ctl', 'configtest'], sudo=True)
+            full_error = stdout2 + stderr2 if exit_code2 != 0 else stderr
+            
+            logger.error(f"Apache config test failed: {full_error}")
+            
             # Try to fix ports.conf and retry
-            logger.warning(f"Apache config test failed, attempting to fix ports.conf: {stderr}")
+            logger.warning("Attempting to fix Apache ports.conf...")
             if fix_apache_ports_conf():
                 exit_code, stdout, stderr = run_command(['apache2ctl', 'configtest'], sudo=True)
                 if exit_code != 0:
-                    return {'success': False, 'error': f'Apache config test failed after fix attempt: {stderr}'}
+                    # Get detailed error
+                    exit_code2, stdout2, stderr2 = run_command(['apache2ctl', 'configtest'], sudo=True)
+                    detailed_error = stdout2 + stderr2 if exit_code2 != 0 else stderr
+                    logger.error(f"Apache config test still failing after fix: {detailed_error}")
+                    return {'success': False, 'error': f'Apache configuration is invalid: {detailed_error}'}
             else:
-                return {'success': False, 'error': f'Apache config test failed: {stderr}'}
+                return {'success': False, 'error': f'Apache config test failed: {full_error}'}
+        
+        logger.info("Apache configuration test passed")
         
         # Verify PHP processing is available
         exit_code, stdout, stderr = run_command(['apache2ctl', '-M'], sudo=True)
@@ -1086,14 +1114,37 @@ def enable_website(website: Website) -> Dict[str, any]:
                 return {'success': False, 'error': 'Neither PHP-FPM nor mod_php is available. PHP files cannot be processed.'}
         
         # Restart Apache instead of reload to ensure PHP handler is properly loaded
-        exit_code, stdout, stderr = run_command(['systemctl', 'restart', 'apache2'], sudo=True)
-        if exit_code != 0:
-            return {'success': False, 'error': f'Failed to restart Apache: {stderr}'}
-        
-        # Verify Apache configuration is valid after restart
+        # But first, verify config is still valid
         exit_code, stdout, stderr = run_command(['apache2ctl', 'configtest'], sudo=True)
         if exit_code != 0:
-            logger.warning(f"Apache config test after restart: {stderr}")
+            return {'success': False, 'error': f'Apache configuration invalid before restart: {stdout + stderr}'}
+        
+        # Try to restart Apache
+        exit_code, stdout, stderr = run_command(['systemctl', 'restart', 'apache2'], sudo=True)
+        if exit_code != 0:
+            # Get more details about the failure
+            exit_code2, stdout2, stderr2 = run_command(['systemctl', 'status', 'apache2'], sudo=True)
+            status_output = stdout2 + stderr2
+            
+            # Check Apache error log for details
+            exit_code3, log_output, _ = run_command([
+                'tail', '-n', '20', '/var/log/apache2/error.log'
+            ], sudo=True)
+            
+            error_details = f"Status: {status_output}\n\nRecent errors: {log_output}"
+            logger.error(f"Apache restart failed: {error_details}")
+            return {'success': False, 'error': f'Failed to restart Apache. Check logs: {error_details}'}
+        
+        # Wait a moment and verify Apache is running
+        import time
+        time.sleep(2)
+        exit_code, stdout, stderr = run_command(['systemctl', 'is-active', 'apache2'], sudo=True)
+        if exit_code != 0:
+            # Get status for debugging
+            exit_code2, stdout2, stderr2 = run_command(['systemctl', 'status', 'apache2'], sudo=True)
+            return {'success': False, 'error': f'Apache failed to start after restart. Status: {stdout2 + stderr2}'}
+        
+        logger.info("Apache restarted successfully")
         
         # Enable Nginx site (reverse proxy)
         source = os.path.abspath(os.path.join(settings.SKYDOCK_NGINX_SITES_AVAILABLE, website.domain))

@@ -24,6 +24,7 @@ class SystemUserBackend(BaseBackend):
     
     def authenticate(self, request, username=None, password=None, **kwargs):
         if username is None or password is None:
+            logger.debug("Username or password is None")
             return None
         
         # Check if user exists in system
@@ -34,67 +35,102 @@ class SystemUserBackend(BaseBackend):
             logger.warning(f"User {username} not found in system")
             return None
         
-        # Verify password using helper script (more reliable)
+        # Try multiple authentication methods
         password_valid = False
         
+        # Method 1: Try using crypt with /etc/shadow (fastest and most reliable)
         try:
-            # Get path to helper script
-            script_path = Path(__file__).parent / 'verify_password.py'
+            import spwd
+            import crypt
+            shadow_entry = spwd.getspnam(username)
+            hashed = shadow_entry.sp_pwd
             
-            # Make sure script is executable
-            if script_path.exists():
-                os.chmod(script_path, 0o755)
-                
-                logger.info(f"Attempting to authenticate user: {username}")
-                
-                # Run helper script
-                result = subprocess.run(
-                    ['python3', str(script_path), username, password],
-                    capture_output=True,
-                    timeout=20,
-                    text=True
-                )
-                
-                logger.info(f"Helper script exit code: {result.returncode}")
-                if result.stdout:
-                    logger.info(f"Helper script stdout: {result.stdout.strip()}")
-                if result.stderr:
-                    logger.warning(f"Helper script stderr: {result.stderr.strip()}")
-                
-                # Log the actual command being run for debugging
-                logger.info(f"Ran: python3 {script_path} {username} <password>")
-                
-                if result.returncode == 0:
+            # Skip locked accounts
+            if hashed not in ['!', '*', 'x']:
+                if crypt.crypt(password, hashed) == hashed:
                     password_valid = True
-                    logger.info(f"Password verified successfully for user {username}")
-                else:
-                    logger.warning(f"Password verification failed for user {username} (exit: {result.returncode})")
-            else:
-                logger.error(f"Helper script not found at {script_path}")
-                # Fallback to direct pexpect
-                return self._authenticate_direct(username, password, pwd_entry)
-                
-        except subprocess.TimeoutExpired:
-            logger.error(f"Timeout during password verification for user {username}")
-            return None
+                    logger.info(f"Password verified using crypt method for user {username}")
+        except (KeyError, PermissionError, ImportError) as e:
+            logger.debug(f"Crypt method not available: {e}")
+            # Fall through to other methods
         except Exception as e:
-            logger.error(f"Error during password verification for user {username}: {e}", exc_info=True)
-            # Fallback to direct method
+            logger.debug(f"Crypt method error: {e}")
+        
+        # Method 2: Use helper script if crypt didn't work
+        if not password_valid:
+            try:
+                # Get path to helper script
+                script_path = Path(__file__).parent / 'verify_password.py'
+                
+                # Make sure script is executable
+                if script_path.exists():
+                    os.chmod(script_path, 0o755)
+                    
+                    logger.debug(f"Attempting to authenticate user: {username} using helper script")
+                    
+                    # Run helper script with explicit python3 path
+                    python3_paths = ['/usr/bin/python3', '/usr/local/bin/python3', 'python3']
+                    python3_path = None
+                    for path in python3_paths:
+                        if os.path.exists(path) or path == 'python3':
+                            python3_path = path
+                            break
+                    
+                    if not python3_path:
+                        logger.error("python3 not found")
+                        return self._authenticate_direct(username, password, pwd_entry)
+                    
+                    # Run helper script
+                    result = subprocess.run(
+                        [python3_path, str(script_path), username, password],
+                        capture_output=True,
+                        timeout=20,
+                        text=True
+                    )
+                    
+                    logger.debug(f"Helper script exit code: {result.returncode}")
+                    if result.stdout:
+                        logger.debug(f"Helper script stdout: {result.stdout.strip()}")
+                    if result.stderr and result.returncode != 0:
+                        logger.debug(f"Helper script stderr: {result.stderr.strip()}")
+                    
+                    if result.returncode == 0:
+                        password_valid = True
+                        logger.info(f"Password verified successfully for user {username} using helper script")
+                    else:
+                        logger.debug(f"Helper script verification failed for user {username} (exit: {result.returncode})")
+                else:
+                    logger.warning(f"Helper script not found at {script_path}, using direct method")
+                    return self._authenticate_direct(username, password, pwd_entry)
+                    
+            except subprocess.TimeoutExpired:
+                logger.warning(f"Timeout during password verification for user {username}")
+                # Try direct method as fallback
+                return self._authenticate_direct(username, password, pwd_entry)
+            except Exception as e:
+                logger.warning(f"Error during password verification for user {username}: {e}")
+                # Fallback to direct method
+                return self._authenticate_direct(username, password, pwd_entry)
+        
+        # Method 3: Direct pexpect if both methods failed
+        if not password_valid:
+            logger.debug("Trying direct authentication method")
             return self._authenticate_direct(username, password, pwd_entry)
         
         if password_valid:
             return self._create_user(username, pwd_entry)
         
-        logger.warning(f"Authentication failed for user {username}")
+        logger.warning(f"All authentication methods failed for user {username}")
         return None
     
     def _authenticate_direct(self, username, password, pwd_entry):
-        """Fallback direct authentication method."""
+        """Fallback direct authentication method using pexpect with su."""
         password_valid = False
         try:
             env = os.environ.copy()
             env['LANG'] = 'C'
             env['LC_ALL'] = 'C'
+            env['TERM'] = 'dumb'  # Prevent terminal issues
             
             # Use full path to su
             su_paths = ['/bin/su', '/usr/bin/su', 'su']
@@ -109,40 +145,84 @@ class SystemUserBackend(BaseBackend):
                 logger.error("su command not found")
                 return None
             
-            child = pexpect.spawn(
-                su_path,
-                ['-c', 'exit 0', username],
-                timeout=15,
-                encoding='utf-8',
-                echo=False,
-                env=env
-            )
+            logger.debug(f"Using su at {su_path} for direct authentication")
             
-            patterns = [
-                'Password:',
-                'password:',
-                'Password for',
-                'password for',
-                pexpect.EOF,
-                pexpect.TIMEOUT
+            # Use su with a simple command that requires password
+            # Try different su command formats
+            su_commands = [
+                [su_path, '-c', 'true', username],  # Most common format
+                [su_path, username, '-c', 'true'],   # Alternative format
             ]
             
-            index = child.expect(patterns, timeout=15)
+            for su_cmd in su_commands:
+                try:
+                    child = pexpect.spawn(
+                        su_cmd[0],
+                        su_cmd[1:],
+                        timeout=10,
+                        encoding='utf-8',
+                        echo=False,
+                        env=env
+                    )
+                    
+                    # Wait for password prompt with more patterns
+                    patterns = [
+                        'Password:',
+                        'password:',
+                        'Password for',
+                        'password for',
+                        'su:',
+                        pexpect.EOF,
+                        pexpect.TIMEOUT
+                    ]
+                    
+                    try:
+                        index = child.expect(patterns, timeout=10)
+                        
+                        # If we got EOF or TIMEOUT before prompt, try next command format
+                        if index >= len(patterns) - 2:
+                            child.close(force=True)
+                            continue
+                        
+                        # Send password
+                        child.sendline(password)
+                        
+                        # Wait for command to complete
+                        child.expect(pexpect.EOF, timeout=10)
+                        exit_status = child.exitstatus
+                        child.close()
+                        
+                        # None or 0 both indicate success
+                        if exit_status == 0 or exit_status is None:
+                            password_valid = True
+                            logger.info(f"Direct authentication succeeded for user {username}")
+                            break
+                        else:
+                            logger.debug(f"su command failed with exit status: {exit_status}")
+                            
+                    except pexpect.TIMEOUT:
+                        logger.debug("Timeout in direct authentication, trying next method")
+                        child.close(force=True)
+                        continue
+                    except pexpect.EOF:
+                        # Sometimes EOF happens but exit status is still valid
+                        try:
+                            exit_status = child.exitstatus
+                            child.close()
+                            if exit_status == 0 or exit_status is None:
+                                password_valid = True
+                                logger.info(f"Direct authentication succeeded (EOF) for user {username}")
+                                break
+                        except:
+                            pass
+                        continue
+                        
+                except Exception as e:
+                    logger.debug(f"Error with su command format {su_cmd}: {e}")
+                    continue
             
-            if index >= len(patterns) - 2:
-                child.close(force=True)
-                return None
-            
-            child.sendline(password)
-            child.expect(pexpect.EOF, timeout=15)
-            exit_status = child.exitstatus
-            child.close()
-            
-            # None or 0 both indicate success (None can happen when process ends normally)
-            if exit_status == 0 or exit_status is None:
-                password_valid = True
         except Exception as e:
-            logger.error(f"Direct authentication failed: {e}")
+            logger.error(f"Direct authentication failed: {e}", exc_info=True)
             return None
         
         if password_valid:

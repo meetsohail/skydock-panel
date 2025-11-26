@@ -71,79 +71,85 @@ try:
         sys.stderr.write("su command not found\n")
         sys.exit(1)
     
-    child = pexpect.spawn(
-        su_path,
-        ['-c', 'exit 0', username],
-        timeout=15,
-        encoding='utf-8',
-        echo=False,
-        env=env
-    )
-    
-    # Wait for password prompt - try multiple patterns
-    patterns = [
-        'Password:',
-        'password:',
-        'Password for',
-        'password for',
-        pexpect.EOF,
-        pexpect.TIMEOUT
+    # Try different su command formats
+    su_commands = [
+        [su_path, '-c', 'true', username],  # Standard format: su -c 'command' username
+        [su_path, username, '-c', 'true'],   # Alternative format
     ]
     
-    try:
-        index = child.expect(patterns, timeout=15)
-        
-        # If we got EOF or TIMEOUT before prompt, fail
-        if index >= len(patterns) - 2:
-            sys.stderr.write(f"No password prompt found (index: {index})\n")
-            child.close(force=True)
-            sys.exit(1)
-        
-        # Send password
-        child.sendline(password)
-        
-        # Wait for command to complete
-        child.expect(pexpect.EOF, timeout=15)
-        
-        # Get exit status - handle None (which means success in some cases)
-        exit_status = child.exitstatus
-        child.close()
-        
-        # Exit with su's exit status (0 = success, None = success, non-zero = failure)
-        # Note: exitstatus can be None if the process ended normally
-        if exit_status == 0 or exit_status is None:
-            sys.exit(0)
-        else:
-            sys.stderr.write(f"su command failed with exit status: {exit_status}\n")
-            sys.exit(1)
+    for su_cmd in su_commands:
+        try:
+            child = pexpect.spawn(
+                su_cmd[0],
+                su_cmd[1:],
+                timeout=10,
+                encoding='utf-8',
+                echo=False,
+                env=env
+            )
             
-    except pexpect.TIMEOUT:
-        sys.stderr.write("Timeout waiting for password prompt or command completion\n")
-        try:
-            child.close(force=True)
-        except:
-            pass
-        sys.exit(1)
-    except pexpect.EOF:
-        # Sometimes EOF happens but exit status is still valid
-        try:
-            exit_status = child.exitstatus
-            child.close()
-            # None or 0 both indicate success
-            if exit_status == 0 or exit_status is None:
-                sys.exit(0)
-            else:
-                sys.stderr.write(f"Unexpected EOF, exit status: {exit_status}\n")
-                sys.exit(1)
-        except:
-            sys.exit(1)
-    except Exception as e:
-        sys.stderr.write(f"Exception in pexpect: {str(e)}\n")
-        try:
-            child.close(force=True)
-        except:
-            pass
-        sys.exit(1)
+            # Wait for password prompt - try multiple patterns
+            patterns = [
+                'Password:',
+                'password:',
+                'Password for',
+                'password for',
+                'su:',
+                pexpect.EOF,
+                pexpect.TIMEOUT
+            ]
+            
+            try:
+                index = child.expect(patterns, timeout=10)
+                
+                # If we got EOF or TIMEOUT before prompt, try next command format
+                if index >= len(patterns) - 2:
+                    sys.stderr.write(f"No password prompt found (index: {index}), trying next format\n")
+                    child.close(force=True)
+                    continue
+                
+                # Send password
+                child.sendline(password)
+                
+                # Wait for command to complete
+                child.expect(pexpect.EOF, timeout=10)
+                
+                # Get exit status - handle None (which means success in some cases)
+                exit_status = child.exitstatus
+                child.close()
+                
+                # Exit with su's exit status (0 = success, None = success, non-zero = failure)
+                if exit_status == 0 or exit_status is None:
+                    sys.exit(0)
+                else:
+                    sys.stderr.write(f"su command failed with exit status: {exit_status}\n")
+                    # Try next command format
+                    continue
+                    
+            except pexpect.TIMEOUT:
+                sys.stderr.write("Timeout waiting for password prompt, trying next format\n")
+                child.close(force=True)
+                continue
+            except pexpect.EOF:
+                # Sometimes EOF happens but exit status is still valid
+                try:
+                    exit_status = child.exitstatus
+                    child.close()
+                    if exit_status == 0 or exit_status is None:
+                        sys.exit(0)
+                    else:
+                        sys.stderr.write(f"Unexpected EOF, exit status: {exit_status}, trying next format\n")
+                        continue
+                except:
+                    continue
+                    
+        except Exception as e:
+            sys.stderr.write(f"Error with su command format: {str(e)}, trying next format\n")
+            continue
+    
+    # All methods failed
+    sys.stderr.write("All su command formats failed\n")
+    sys.exit(1)
         
 except Exception as e:
     sys.stderr.write(f"Error spawning su command: {str(e)}\n")

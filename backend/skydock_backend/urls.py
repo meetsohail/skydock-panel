@@ -19,6 +19,7 @@ urlpatterns = [
     path('services/', views.services, name='services'),
     path('websites/', views.websites, name='websites'),
     path('settings/', views.settings, name='settings'),
-    path('', RedirectView.as_view(url='/dashboard/', permanent=False)),
+    # Root path - redirect to login if not authenticated, dashboard if authenticated
+    path('', views.index_view, name='index'),
 ]
 

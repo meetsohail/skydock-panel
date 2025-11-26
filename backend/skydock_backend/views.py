@@ -33,6 +33,14 @@ def logout_page(request):
     return redirect('login')
 
 
+def index_view(request):
+    """Root/index view - redirect to appropriate page."""
+    if request.user.is_authenticated:
+        return redirect('dashboard')
+    else:
+        return redirect('login')
+
+
 @login_required
 def dashboard(request):
     """Dashboard page."""

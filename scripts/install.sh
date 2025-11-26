@@ -17,7 +17,7 @@ NC='\033[0m' # No Color
 # Configuration
 SKYDOCK_USER="skydock"
 SKYDOCK_HOME="/opt/skydock-panel"
-SKYDOCK_PORT="8080"
+SKYDOCK_PORT="2083"
 REPO_URL="git@github.com:meetsohail/skydock-panel.git"
 REPO_URL_HTTPS="https://github.com/meetsohail/skydock-panel.git"
 BRANCH="master"
@@ -584,8 +584,9 @@ setup_firewall() {
         ufw allow 22/tcp
         ufw allow 80/tcp
         ufw allow 443/tcp
+        ufw allow $SKYDOCK_PORT/tcp
         ufw --force enable
-        log_info "Firewall configured"
+        log_info "Firewall configured (ports 22, 80, 443, $SKYDOCK_PORT)"
     else
         log_warn "UFW not found, skipping firewall configuration"
     fi
@@ -672,6 +673,12 @@ main() {
         log_info "Access the panel at: http://$SERVER_IP:$SKYDOCK_PORT"
         log_info "  (directly on port $SKYDOCK_PORT)"
     fi
+    log_info ""
+    log_info "If you see 'Not Found' errors, check:"
+    log_info "  1. Service status: systemctl status skydock-panel"
+    log_info "  2. Service logs: journalctl -u skydock-panel -n 50"
+    log_info "  3. Port is open: netstat -tlnp | grep $SKYDOCK_PORT"
+    log_info "  4. Try accessing: http://$SERVER_IP:$SKYDOCK_PORT/login/"
     log_info ""
     if [ "$is_update" = false ]; then
         log_info "Admin credentials:"

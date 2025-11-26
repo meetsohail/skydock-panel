@@ -385,11 +385,34 @@ EOF
     
     # Run migrations
     log_info "Running Django migrations..."
-    if python manage.py migrate --noinput; then
+    if python manage.py migrate --noinput 2>&1; then
         log_info "Migrations completed successfully"
     else
         log_error "Migration failed. Please check the error above."
         exit 1
+    fi
+    
+    # Verify migrations were successful by checking if tables exist
+    log_info "Verifying database setup..."
+    if python manage.py shell << 'VERIFY_EOF'
+from django.db import connection
+cursor = connection.cursor()
+cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='accounts_user'")
+result = cursor.fetchone()
+if not result:
+    print("ERROR: accounts_user table not found")
+    exit(1)
+print("Database verification successful")
+VERIFY_EOF
+    then
+        log_info "Database tables verified"
+    else
+        log_error "Database tables not created properly. Migrations may have failed."
+        log_error "Trying to run migrations again..."
+        python manage.py migrate --run-syncdb --noinput || {
+            log_error "Migration retry failed. Please check Django configuration."
+            exit 1
+        }
     fi
     
     # Create superuser only if it doesn't exist (new installation)
@@ -398,18 +421,35 @@ EOF
         ADMIN_EMAIL="admin@skydock.local"
         ADMIN_PASSWORD=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
         
+        # Use Django management command to create superuser (more reliable)
         python manage.py shell << EOF
+import sys
+import os
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'skydock_backend.settings')
+import django
+django.setup()
+
 from accounts.models import User
-if not User.objects.filter(email='$ADMIN_EMAIL').exists():
-    User.objects.create_superuser('$ADMIN_EMAIL', '$ADMIN_PASSWORD')
-    print('Admin user created')
-else:
-    print('Admin user already exists')
+try:
+    if not User.objects.filter(email='$ADMIN_EMAIL').exists():
+        user = User.objects.create_superuser('$ADMIN_EMAIL', '$ADMIN_PASSWORD')
+        print('Admin user created successfully')
+    else:
+        print('Admin user already exists')
+except Exception as e:
+    print(f'Error creating admin user: {e}', file=sys.stderr)
+    import traceback
+    traceback.print_exc()
+    sys.exit(1)
 EOF
         
-        log_info "Admin credentials:"
-        log_info "  Email: $ADMIN_EMAIL"
-        log_info "  Password: $ADMIN_PASSWORD"
+        if [ $? -eq 0 ]; then
+            log_info "Admin credentials:"
+            log_info "  Email: $ADMIN_EMAIL"
+            log_info "  Password: $ADMIN_PASSWORD"
+        else
+            log_warn "Failed to create admin user, but continuing installation..."
+        fi
     else
         log_info "Skipping admin user creation (update mode)"
     fi
@@ -442,7 +482,7 @@ WorkingDirectory=$SKYDOCK_HOME/backend
 Environment="PATH=$SKYDOCK_HOME/backend/venv/bin"
 EnvironmentFile=$SKYDOCK_HOME/backend/.env
 ExecStart=$SKYDOCK_HOME/backend/venv/bin/gunicorn \\
-    --bind 127.0.0.1:$SKYDOCK_PORT \\
+    --bind 0.0.0.0:$SKYDOCK_PORT \\
     --workers 3 \\
     --timeout 120 \\
     --access-logfile $SKYDOCK_HOME/logs/access.log \\
@@ -462,18 +502,41 @@ EOF
     # Reload systemd and enable service
     systemctl daemon-reload
     systemctl enable skydock-panel.service
-    systemctl start skydock-panel.service
     
-    log_info "Systemd service configured and started"
+    # Start or restart the service
+    if systemctl is-active --quiet skydock-panel.service; then
+        systemctl restart skydock-panel.service
+        log_info "Systemd service restarted"
+    else
+        systemctl start skydock-panel.service
+        log_info "Systemd service started"
+    fi
+    
+    # Wait a moment and verify service is running
+    sleep 2
+    if systemctl is-active --quiet skydock-panel.service; then
+        log_info "Service is running successfully"
+    else
+        log_error "Service failed to start. Check logs with: journalctl -u skydock-panel -n 50"
+        systemctl status skydock-panel.service
+        exit 1
+    fi
 }
 
 setup_nginx() {
     log_info "Configuring Nginx reverse proxy..."
     
+    # Check if Nginx is installed and running
+    if ! command -v nginx &> /dev/null; then
+        log_warn "Nginx is not installed. Panel will be accessible directly on port $SKYDOCK_PORT"
+        return 0
+    fi
+    
     # Create Nginx configuration
     cat > /etc/nginx/sites-available/skydock-panel << EOF
 server {
-    listen 80;
+    listen 80 default_server;
+    listen [::]:80 default_server;
     server_name _;
     
     client_max_body_size 100M;
@@ -485,10 +548,15 @@ server {
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
         proxy_redirect off;
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
     }
     
     location /static/ {
         alias $SKYDOCK_HOME/backend/staticfiles/;
+        expires 30d;
+        add_header Cache-Control "public, immutable";
     }
 }
 EOF
@@ -499,11 +567,14 @@ EOF
     # Remove default site if it exists
     rm -f /etc/nginx/sites-enabled/default
     
-    # Test and reload Nginx
-    nginx -t
-    systemctl reload nginx
-    
-    log_info "Nginx configured"
+    # Test Nginx configuration
+    if nginx -t 2>&1; then
+        systemctl reload nginx || systemctl restart nginx
+        log_info "Nginx configured and reloaded"
+    else
+        log_error "Nginx configuration test failed. Panel will be accessible directly on port $SKYDOCK_PORT"
+        rm -f /etc/nginx/sites-enabled/skydock-panel
+    fi
 }
 
 setup_firewall() {

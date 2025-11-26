@@ -19,6 +19,7 @@ urlpatterns = [
     path('dashboard/', views.dashboard, name='dashboard'),
     path('services/', views.services, name='services'),
     path('websites/', views.websites, name='websites'),
+    path('websites/<int:website_id>/', views.website_detail_page, name='website_detail_page'),
     path('settings/', views.settings, name='settings'),
     # Root path - redirect to login if not authenticated, dashboard if authenticated
     path('', views.index_view, name='index'),

@@ -656,8 +656,10 @@ setup_firewall() {
     if command -v ufw &> /dev/null; then
         ufw allow 22/tcp
         ufw allow $SKYDOCK_PORT/tcp
+        ufw allow 80/tcp   # HTTP
+        ufw allow 443/tcp  # HTTPS
         ufw --force enable
-        log_info "Firewall configured (ports 22, $SKYDOCK_PORT)"
+        log_info "Firewall configured (ports 22, $SKYDOCK_PORT, 80, 443)"
     else
         log_warn "UFW not found, skipping firewall configuration"
     fi

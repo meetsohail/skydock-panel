@@ -115,8 +115,28 @@ def website_detail(request, website_id: int):
         )
     
     if request.method == 'GET':
+        from .utils import get_website_storage
+        
         serializer = WebsiteSerializer(website)
-        return Response(serializer.data)
+        data = serializer.data
+        
+        # Add storage information
+        storage_info = get_website_storage(website)
+        data['storage'] = storage_info
+        
+        # Add database credentials if available
+        try:
+            db_cred = DatabaseCredential.objects.get(website=website)
+            data['database'] = {
+                'name': db_cred.db_name,
+                'user': db_cred.db_user,
+                'password': db_cred.db_password,
+                'host': db_cred.db_host
+            }
+        except DatabaseCredential.DoesNotExist:
+            data['database'] = None
+        
+        return Response(data)
     
     elif request.method == 'PUT':
         serializer = WebsiteSerializer(website, data=request.data, partial=True)

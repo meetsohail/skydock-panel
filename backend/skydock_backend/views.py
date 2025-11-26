@@ -70,3 +70,9 @@ def settings(request):
     """Settings page."""
     return render(request, 'settings.html')
 
+
+@login_required
+def website_detail_page(request, website_id: int):
+    """Website detail page."""
+    return render(request, 'website_detail.html', {'website_id': website_id})
+

@@ -20,6 +20,55 @@ def generate_password(length: int = 16) -> str:
     return ''.join(secrets.choice(alphabet) for _ in range(length))
 
 
+def get_website_storage(website: Website) -> Dict[str, any]:
+    """Get storage/disk usage for a website directory."""
+    try:
+        import shutil
+        
+        # Get disk usage using du command with sudo
+        exit_code, stdout, stderr = run_command([
+            'du', '-sb', website.root_path
+        ], sudo=True)
+        
+        if exit_code != 0:
+            logger.warning(f"Failed to get storage for {website.domain}: {stderr}")
+            return {
+                'used_bytes': 0,
+                'used_mb': 0,
+                'used_gb': 0,
+                'file_count': 0
+            }
+        
+        # Parse output (first number is bytes)
+        used_bytes = int(stdout.split()[0]) if stdout.strip() else 0
+        used_mb = round(used_bytes / (1024 * 1024), 2)
+        used_gb = round(used_bytes / (1024 * 1024 * 1024), 2)
+        
+        # Get file count
+        exit_code, stdout, stderr = run_command([
+            'find', website.root_path, '-type', 'f'
+        ], sudo=True)
+        
+        file_count = len([line for line in stdout.strip().split('\n') if line.strip()]) if stdout.strip() else 0
+        
+        return {
+            'used_bytes': used_bytes,
+            'used_mb': used_mb,
+            'used_gb': used_gb,
+            'file_count': file_count,
+            'path': website.root_path
+        }
+    except Exception as e:
+        logger.error(f"Error getting website storage: {e}")
+        return {
+            'used_bytes': 0,
+            'used_mb': 0,
+            'used_gb': 0,
+            'file_count': 0,
+            'error': str(e)
+        }
+
+
 def create_directory(path: str, owner_user: Optional[str] = None) -> Dict[str, any]:
     """Create directory with proper permissions.
     
@@ -556,14 +605,50 @@ def create_apache_config(website: Website) -> Dict[str, any]:
 
 
 def create_nginx_reverse_proxy_config(website: Website) -> Dict[str, any]:
-    """Create Nginx reverse proxy configuration (proxies to Apache on port 8080)."""
+    """Create Nginx reverse proxy configuration (proxies to Apache on port 8080).
+    Listens on ports 80 (HTTP) and 443 (HTTPS).
+    """
     try:
-        config_content = f"""server {{
+        config_content = f"""# HTTP server block - port 80
+server {{
     listen 80;
+    listen [::]:80;
     server_name {website.domain} www.{website.domain};
     
     access_log /var/log/nginx/{website.domain}-access.log;
     error_log /var/log/nginx/{website.domain}-error.log;
+
+    location / {{
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port $server_port;
+    }}
+}}
+
+# HTTPS server block - port 443
+# Note: Currently configured for HTTP on port 443 (for testing)
+# To enable SSL/HTTPS, uncomment the SSL directives below and obtain certificates
+# For Let's Encrypt: certbot --nginx -d {website.domain} -d www.{website.domain}
+server {{
+    listen 443;
+    listen [::]:443;
+    server_name {website.domain} www.{website.domain};
+    
+    access_log /var/log/nginx/{website.domain}-access.log;
+    error_log /var/log/nginx/{website.domain}-error.log;
+
+    # SSL configuration (uncomment and configure after obtaining certificates)
+    # listen 443 ssl http2;
+    # listen [::]:443 ssl http2;
+    # ssl_certificate /etc/letsencrypt/live/{website.domain}/fullchain.pem;
+    # ssl_certificate_key /etc/letsencrypt/live/{website.domain}/privkey.pem;
+    # ssl_protocols TLSv1.2 TLSv1.3;
+    # ssl_ciphers HIGH:!aNULL:!MD5;
+    # ssl_prefer_server_ciphers on;
 
     location / {{
         proxy_pass http://127.0.0.1:8080;

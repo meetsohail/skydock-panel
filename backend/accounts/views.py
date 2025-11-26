@@ -19,16 +19,16 @@ from .serializers import UserSerializer, SSHProfileSerializer
 @permission_classes([AllowAny])
 def login_view(request):
     """Login endpoint."""
-    email = request.data.get('email')
+    username = request.data.get('username')
     password = request.data.get('password')
 
-    if not email or not password:
+    if not username or not password:
         return Response(
-            {'error': 'Email and password are required'},
+            {'error': 'Username and password are required'},
             status=status.HTTP_400_BAD_REQUEST
         )
 
-    user = authenticate(request, username=email, password=password)
+    user = authenticate(request, username=username, password=password)
     if user is not None:
         login(request, user)
         return Response({
@@ -37,7 +37,7 @@ def login_view(request):
         })
     else:
         return Response(
-            {'error': 'Invalid email or password'},
+            {'error': 'Invalid username or password'},
             status=status.HTTP_401_UNAUTHORIZED
         )
 

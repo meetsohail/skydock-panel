@@ -157,7 +157,6 @@ install_dependencies() {
         python3-pip \
         python3-dev \
         build-essential \
-        nginx \
         mysql-server \
         mysql-client \
         ufw \
@@ -167,7 +166,8 @@ install_dependencies() {
         gnupg \
         lsb-release
     
-    log_info "System dependencies installed"
+    # Note: Nginx is not installed - panel runs directly on port 2083
+    log_info "System dependencies installed (Nginx not installed - panel runs directly on port $SKYDOCK_PORT)"
 }
 
 create_skydock_user() {
@@ -438,6 +438,7 @@ VERIFY_EOF
         ADMIN_PASSWORD=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
         
         # Use Django management command to create superuser (more reliable)
+        ADMIN_USERNAME="admin"
         python manage.py shell << EOF
 import sys
 import os
@@ -447,8 +448,8 @@ django.setup()
 
 from accounts.models import User
 try:
-    if not User.objects.filter(email='$ADMIN_EMAIL').exists():
-        user = User.objects.create_superuser('$ADMIN_EMAIL', '$ADMIN_PASSWORD')
+    if not User.objects.filter(username='$ADMIN_USERNAME').exists():
+        user = User.objects.create_superuser('$ADMIN_USERNAME', '$ADMIN_EMAIL', '$ADMIN_PASSWORD')
         print('Admin user created successfully')
     else:
         print('Admin user already exists')
@@ -461,7 +462,7 @@ EOF
         
         if [ $? -eq 0 ]; then
             log_info "Admin credentials:"
-            log_info "  Email: $ADMIN_EMAIL"
+            log_info "  Username: $ADMIN_USERNAME"
             log_info "  Password: $ADMIN_PASSWORD"
         else
             log_warn "Failed to create admin user, but continuing installation..."
@@ -540,57 +541,11 @@ EOF
 }
 
 setup_nginx() {
-    log_info "Configuring Nginx reverse proxy..."
-    
-    # Check if Nginx is installed and running
-    if ! command -v nginx &> /dev/null; then
-        log_warn "Nginx is not installed. Panel will be accessible directly on port $SKYDOCK_PORT"
-        return 0
-    fi
-    
-    # Create Nginx configuration
-    cat > /etc/nginx/sites-available/skydock-panel << EOF
-server {
-    listen 80 default_server;
-    listen [::]:80 default_server;
-    server_name _;
-    
-    client_max_body_size 100M;
-    
-    location / {
-        proxy_pass http://127.0.0.1:$SKYDOCK_PORT;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_redirect off;
-        proxy_connect_timeout 60s;
-        proxy_send_timeout 60s;
-        proxy_read_timeout 60s;
-    }
-    
-    location /static/ {
-        alias $SKYDOCK_HOME/backend/staticfiles/;
-        expires 30d;
-        add_header Cache-Control "public, immutable";
-    }
-}
-EOF
-    
-    # Enable site
-    ln -sf /etc/nginx/sites-available/skydock-panel /etc/nginx/sites-enabled/
-    
-    # Remove default site if it exists
-    rm -f /etc/nginx/sites-enabled/default
-    
-    # Test Nginx configuration
-    if nginx -t 2>&1; then
-        systemctl reload nginx || systemctl restart nginx
-        log_info "Nginx configured and reloaded"
-    else
-        log_error "Nginx configuration test failed. Panel will be accessible directly on port $SKYDOCK_PORT"
-        rm -f /etc/nginx/sites-enabled/skydock-panel
-    fi
+    log_info "Skipping Nginx configuration - panel runs directly on port $SKYDOCK_PORT"
+    # Remove any existing Nginx configuration for SkyDock Panel
+    rm -f /etc/nginx/sites-enabled/skydock-panel
+    rm -f /etc/nginx/sites-available/skydock-panel
+    log_info "Panel will be accessible directly at http://your-server-ip:$SKYDOCK_PORT"
 }
 
 setup_firewall() {
@@ -598,11 +553,9 @@ setup_firewall() {
     
     if command -v ufw &> /dev/null; then
         ufw allow 22/tcp
-        ufw allow 80/tcp
-        ufw allow 443/tcp
         ufw allow $SKYDOCK_PORT/tcp
         ufw --force enable
-        log_info "Firewall configured (ports 22, 80, 443, $SKYDOCK_PORT)"
+        log_info "Firewall configured (ports 22, $SKYDOCK_PORT)"
     else
         log_warn "UFW not found, skipping firewall configuration"
     fi
@@ -681,15 +634,9 @@ main() {
         SERVER_IP="your-server-ip"
     fi
     
-    # Always show direct access URL on port 2083
+    # Show direct access URL on port 2083
     log_info "Access the panel at: http://$SERVER_IP:$SKYDOCK_PORT"
     log_info ""
-    
-    # Also mention Nginx if it's configured
-    if systemctl is-active --quiet nginx 2>/dev/null && [ -f /etc/nginx/sites-enabled/skydock-panel ]; then
-        log_info "Alternative access via Nginx: http://$SERVER_IP (port 80)"
-        log_info ""
-    fi
     
     log_info "If you see 'Not Found' errors, check:"
     log_info "  1. Service status: systemctl status skydock-panel"
@@ -699,7 +646,7 @@ main() {
     log_info ""
     if [ "$is_update" = false ]; then
         log_info "Admin credentials:"
-        log_info "  Email: admin@skydock.local"
+        log_info "  Username: admin"
         log_info "  Password: (check output above)"
         log_info ""
     fi

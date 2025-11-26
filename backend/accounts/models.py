@@ -22,13 +22,13 @@ def get_encryption_key() -> bytes:
 
 
 class User(AbstractUser):
-    """Custom user model with email as username."""
-    email = models.EmailField(unique=True)
+    """Custom user model with username for login."""
+    email = models.EmailField(unique=True, blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
-    USERNAME_FIELD = 'email'
-    REQUIRED_FIELDS = ['username']
+    USERNAME_FIELD = 'username'
+    REQUIRED_FIELDS = ['email']
 
     class Meta:
         db_table = 'accounts_user'

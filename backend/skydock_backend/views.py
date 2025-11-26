@@ -14,15 +14,18 @@ def login_view(request):
     
     if request.method == 'POST':
         from django.contrib.auth import authenticate
-        email = request.POST.get('email')
+        username = request.POST.get('username')
         password = request.POST.get('password')
         
-        user = authenticate(request, username=email, password=password)
-        if user is not None:
-            login(request, user)
-            return redirect('dashboard')
+        if not username or not password:
+            messages.error(request, 'Username and password are required.')
         else:
-            messages.error(request, 'Invalid email or password.')
+            user = authenticate(request, username=username, password=password)
+            if user is not None:
+                login(request, user)
+                return redirect('dashboard')
+            else:
+                messages.error(request, 'Invalid username or password.')
     
     return render(request, 'login.html')
 

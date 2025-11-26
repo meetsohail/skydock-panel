@@ -165,7 +165,7 @@ if not DEBUG:
         CSRF_TRUSTED_ORIGINS = env.list('CSRF_TRUSTED_ORIGINS', default=[])
 
 # SkyDock Panel specific settings
-SKYDOCK_PANEL_PORT = env.int('SKYDOCK_PANEL_PORT', default=8080)
+SKYDOCK_PANEL_PORT = env.int('SKYDOCK_PANEL_PORT', default=2083)
 SKYDOCK_WEB_ROOT = env('SKYDOCK_WEB_ROOT', default='/var/www')
 SKYDOCK_NGINX_SITES_AVAILABLE = env('SKYDOCK_NGINX_SITES_AVAILABLE', default='/etc/nginx/sites-available')
 SKYDOCK_NGINX_SITES_ENABLED = env('SKYDOCK_NGINX_SITES_ENABLED', default='/etc/nginx/sites-enabled')

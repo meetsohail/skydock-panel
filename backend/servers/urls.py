@@ -10,5 +10,6 @@ urlpatterns = [
     path('services/', views.services_list, name='services_list'),
     path('services/control/', views.service_control, name='service_control'),
     path('services/<str:service_name>/logs/', views.service_logs, name='service_logs'),
+    path('redis/info/', views.redis_info, name='redis_info'),
 ]
 

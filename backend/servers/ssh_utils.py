@@ -73,13 +73,14 @@ class CommandExecutor:
             logger.error(f"Failed to establish SSH connection: {e}")
             raise
     
-    def run_command(self, cmd: List[str], sudo: bool = False) -> Tuple[int, str, str]:
+    def run_command(self, cmd: List[str], sudo: bool = False, cwd: Optional[str] = None) -> Tuple[int, str, str]:
         """
         Run a command and return exit code, stdout, and stderr.
         
         Args:
             cmd: Command as list of strings
             sudo: Whether to run with sudo
+            cwd: Working directory for the command
             
         Returns:
             Tuple of (exit_code, stdout, stderr)
@@ -90,9 +91,9 @@ class CommandExecutor:
         if self.use_ssh and self.ssh_client:
             return self._run_ssh_command(cmd)
         else:
-            return self._run_local_command(cmd)
+            return self._run_local_command(cmd, cwd=cwd)
     
-    def _run_local_command(self, cmd: List[str]) -> Tuple[int, str, str]:
+    def _run_local_command(self, cmd: List[str], cwd: Optional[str] = None) -> Tuple[int, str, str]:
         """Run command locally using subprocess."""
         try:
             result = subprocess.run(
@@ -100,7 +101,8 @@ class CommandExecutor:
                 capture_output=True,
                 text=True,
                 timeout=30,
-                check=False
+                check=False,
+                cwd=cwd
             )
             return result.returncode, result.stdout, result.stderr
         except subprocess.TimeoutExpired:
@@ -141,7 +143,7 @@ class CommandExecutor:
 
 
 def run_command(cmd: List[str], sudo: bool = False, use_ssh: bool = False, 
-                ssh_profile: Optional[SSHProfile] = None) -> Tuple[int, str, str]:
+                ssh_profile: Optional[SSHProfile] = None, cwd: Optional[str] = None) -> Tuple[int, str, str]:
     """
     Convenience function to run a command.
     
@@ -150,10 +152,11 @@ def run_command(cmd: List[str], sudo: bool = False, use_ssh: bool = False,
         sudo: Whether to run with sudo
         use_ssh: Whether to use SSH
         ssh_profile: SSH profile for SSH execution
+        cwd: Working directory for the command
         
     Returns:
         Tuple of (exit_code, stdout, stderr)
     """
     with CommandExecutor(use_ssh=use_ssh, ssh_profile=ssh_profile) as executor:
-        return executor.run_command(cmd, sudo=sudo)
+        return executor.run_command(cmd, sudo=sudo, cwd=cwd)
 

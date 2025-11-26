@@ -57,7 +57,7 @@ def server_info(request):
 @permission_classes([IsAuthenticated])
 def services_list(request):
     """Get list of services and their status."""
-    services = ['nginx', 'apache2', 'mysql']
+    services = ['nginx', 'apache2', 'mysql', 'redis-server']
     result = {}
     
     for service in services:
@@ -99,6 +99,43 @@ def service_logs(request, service_name: str):
     except Exception as e:
         return Response(
             {'error': f'Failed to get logs: {str(e)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def redis_info(request):
+    """Get Redis cache information (port, etc.)."""
+    try:
+        import subprocess
+        import re
+        
+        # Get Redis port from config
+        redis_port = 6379  # Default
+        try:
+            with open('/etc/redis/redis.conf', 'r') as f:
+                for line in f:
+                    if line.strip().startswith('port '):
+                        match = re.search(r'port\s+(\d+)', line)
+                        if match:
+                            redis_port = int(match.group(1))
+                            break
+        except:
+            pass
+        
+        # Check if Redis is running
+        status = check_service_status('redis-server')
+        
+        return Response({
+            'port': redis_port,
+            'status': status,
+            'host': 'localhost',
+            'message': f'Use this configuration in WordPress plugins:\nHost: localhost\nPort: {redis_port}'
+        })
+    except Exception as e:
+        return Response(
+            {'error': f'Failed to get Redis info: {str(e)}'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 

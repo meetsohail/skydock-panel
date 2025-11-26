@@ -154,6 +154,16 @@ install_dependencies() {
         build-essential \
         mysql-server \
         mysql-client \
+        nginx \
+        apache2 \
+        php-fpm \
+        php-mysql \
+        php-xml \
+        php-mbstring \
+        php-curl \
+        php-zip \
+        php-gd \
+        redis-server \
         ufw \
         software-properties-common \
         apt-transport-https \
@@ -162,6 +172,20 @@ install_dependencies() {
         lsb-release
     
     log_info "System dependencies installed"
+    
+    # Configure Apache to listen on port 8080 for reverse proxy
+    log_info "Configuring Apache for reverse proxy..."
+    sed -i 's/Listen 80/Listen 8080/' /etc/apache2/ports.conf
+    sed -i 's/<VirtualHost \*:80>/<VirtualHost *:8080>/' /etc/apache2/sites-available/000-default.conf 2>/dev/null || true
+    
+    # Enable required Apache modules
+    a2enmod proxy proxy_http rewrite headers
+    
+    # Start and enable services
+    systemctl enable nginx apache2
+    systemctl start nginx apache2
+    
+    log_info "Nginx and Apache configured"
 }
 
 create_skydock_user() {

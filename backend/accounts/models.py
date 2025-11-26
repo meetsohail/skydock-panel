@@ -58,19 +58,16 @@ class User(AbstractUser):
 
 
 class SSHProfile(models.Model):
-    """SSH profile for server authentication."""
+    """SSH profile for server authentication (password only)."""
     AUTH_TYPE_PASSWORD = 'password'
-    AUTH_TYPE_KEY = 'private_key'
     AUTH_TYPE_CHOICES = [
         (AUTH_TYPE_PASSWORD, 'Password'),
-        (AUTH_TYPE_KEY, 'Private Key'),
     ]
 
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='ssh_profile')
     ssh_username = models.CharField(max_length=100, default='root')
     auth_type = models.CharField(max_length=20, choices=AUTH_TYPE_CHOICES, default=AUTH_TYPE_PASSWORD)
     ssh_password = models.TextField(blank=True, null=True)  # Encrypted
-    ssh_private_key = models.TextField(blank=True, null=True)  # Encrypted
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -110,30 +107,5 @@ class SSHProfile(models.Model):
             # Fallback: return as-is
             return self.ssh_password
 
-    def set_private_key(self, private_key: str) -> None:
-        """Encrypt and store SSH private key."""
-        if not private_key:
-            self.ssh_private_key = None
-            return
-        try:
-            key = get_encryption_key()
-            fernet = Fernet(key)
-            encrypted = fernet.encrypt(private_key.encode())
-            self.ssh_private_key = base64.b64encode(encrypted).decode()
-        except Exception as e:
-            # Fallback: store as-is
-            self.ssh_private_key = private_key
 
-    def get_private_key(self) -> str:
-        """Decrypt and return SSH private key."""
-        if not self.ssh_private_key:
-            return ''
-        try:
-            key = get_encryption_key()
-            fernet = Fernet(key)
-            encrypted = base64.b64decode(self.ssh_private_key.encode())
-            return fernet.decrypt(encrypted).decode()
-        except Exception:
-            # Fallback: return as-is
-            return self.ssh_private_key
 

@@ -34,6 +34,18 @@ def websites_list(request):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
+        # For WordPress, require admin credentials
+        if website_type == Website.TYPE_WORDPRESS:
+            wp_email = request.data.get('wp_email')
+            wp_username = request.data.get('wp_username')
+            wp_password = request.data.get('wp_password')
+            
+            if not wp_email or not wp_username or not wp_password:
+                return Response(
+                    {'error': 'WordPress admin email, username, and password are required'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
         # Check if user already has a website with this domain
         if Website.objects.filter(user=request.user, domain=domain).exists():
             return Response(
@@ -57,7 +69,10 @@ def websites_list(request):
         
         # Create the actual site
         if website_type == Website.TYPE_WORDPRESS:
-            result = create_wordpress_site(website)
+            wp_email = request.data.get('wp_email')
+            wp_username = request.data.get('wp_username')
+            wp_password = request.data.get('wp_password')
+            result = create_wordpress_site(website, wp_email, wp_username, wp_password)
         else:
             result = create_php_site(website)
         

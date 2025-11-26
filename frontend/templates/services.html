@@ -18,7 +18,7 @@
                 <template x-for="service in serviceList" :key="service.name">
                     <tr>
                         <td class="px-6 py-4 whitespace-nowrap">
-                            <div class="text-sm font-medium text-gray-900 dark:text-white" x-text="service.name"></div>
+                            <div class="text-sm font-medium text-gray-900 dark:text-white" x-text="service.displayName || service.name"></div>
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap">
                             <span x-show="service.status.running" class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
@@ -33,6 +33,11 @@
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
                             <div class="flex space-x-2">
+                                <button x-show="service.name === 'redis-server' && service.status.installed" 
+                                        @click="showRedisInfo()"
+                                        class="text-purple-600 hover:text-purple-900 dark:text-purple-400 dark:hover:text-purple-300">
+                                    Cache Info
+                                </button>
                                 <button x-show="service.status.installed && !service.status.running" 
                                         @click="controlService(service.name, 'start')"
                                         class="text-green-600 hover:text-green-900 dark:text-green-400 dark:hover:text-green-300">
@@ -55,6 +60,68 @@
             </tbody>
         </table>
     </div>
+    
+    <!-- Redis Cache Info Popup -->
+    <div x-show="showRedisPopup" 
+         @click.away="showRedisPopup = false"
+         x-cloak
+         class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div class="bg-white dark:bg-gray-800 rounded-lg shadow-xl p-6 max-w-md w-full mx-4">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-lg font-semibold text-gray-900 dark:text-white">Redis Cache Configuration</h3>
+                <button @click="showRedisPopup = false" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                    </svg>
+                </button>
+            </div>
+            
+            <div x-show="redisInfo" class="space-y-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Port</label>
+                    <div class="px-3 py-2 bg-gray-100 dark:bg-gray-700 rounded-md font-mono text-sm">
+                        <span x-text="redisInfo.port"></span>
+                    </div>
+                </div>
+                
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Host</label>
+                    <div class="px-3 py-2 bg-gray-100 dark:bg-gray-700 rounded-md font-mono text-sm">
+                        <span x-text="redisInfo.host"></span>
+                    </div>
+                </div>
+                
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">WordPress Configuration</label>
+                    <div class="px-3 py-2 bg-gray-100 dark:bg-gray-700 rounded-md text-sm">
+                        <p class="text-gray-700 dark:text-gray-300 whitespace-pre-line" x-text="redisInfo.message"></p>
+                    </div>
+                </div>
+                
+                <div class="flex space-x-2 pt-4">
+                    <button x-show="redisInfo.status && !redisInfo.status.running" 
+                            @click="controlService('redis-server', 'start')"
+                            class="flex-1 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-md">
+                        Start Redis
+                    </button>
+                    <button x-show="redisInfo.status && redisInfo.status.running" 
+                            @click="controlService('redis-server', 'stop')"
+                            class="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-md">
+                        Stop Redis
+                    </button>
+                    <button x-show="redisInfo.status && redisInfo.status.installed" 
+                            @click="controlService('redis-server', 'restart')"
+                            class="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-md">
+                        Restart Redis
+                    </button>
+                </div>
+            </div>
+            
+            <div x-show="!redisInfo" class="text-center py-4">
+                <p class="text-gray-500 dark:text-gray-400">Loading Redis information...</p>
+            </div>
+        </div>
+    </div>
 </div>
 
 <script>
@@ -63,8 +130,11 @@ function services() {
         serviceList: [
             { name: 'nginx', status: {} },
             { name: 'apache2', status: {} },
-            { name: 'mysql', status: {} }
+            { name: 'mysql', status: {} },
+            { name: 'redis-server', status: {}, displayName: 'Redis Cache' }
         ],
+        redisInfo: null,
+        showRedisPopup: false,
         loadServices() {
             fetch('/api/servers/services/')
                 .then(response => response.json())
@@ -75,6 +145,18 @@ function services() {
                 })
                 .catch(error => {
                     console.error('Error loading services:', error);
+                });
+        },
+        showRedisInfo() {
+            this.showRedisPopup = true;
+            fetch('/api/servers/redis/info/')
+                .then(response => response.json())
+                .then(data => {
+                    this.redisInfo = data;
+                })
+                .catch(error => {
+                    console.error('Error loading Redis info:', error);
+                    this.redisInfo = { error: 'Failed to load Redis information' };
                 });
         },
         controlService(serviceName, action) {
@@ -93,6 +175,10 @@ function services() {
             .then(data => {
                 if (data.success) {
                     this.loadServices();
+                    // Reload Redis info if popup is open
+                    if (this.showRedisPopup && serviceName === 'redis-server') {
+                        this.showRedisInfo();
+                    }
                     alert(data.message);
                 } else {
                     alert('Error: ' + data.message);

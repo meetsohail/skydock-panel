@@ -77,16 +77,18 @@ phpinfo();
         run_command(['chown', '-R', f'{owner_username}:www-data', website.root_path], sudo=True)
         run_command(['chmod', '-R', '755', website.root_path], sudo=True)
         
-        # Generate web server configuration
-        if website.web_server == Website.WEB_SERVER_NGINX:
-            config_result = create_nginx_config(website)
-        else:
-            config_result = create_apache_config(website)
+        # Generate web server configuration - always use Apache with Nginx reverse proxy
+        # Create Apache config first
+        apache_result = create_apache_config(website)
+        if not apache_result['success']:
+            return apache_result
         
-        if not config_result['success']:
-            return config_result
+        # Create Nginx reverse proxy config
+        nginx_result = create_nginx_reverse_proxy_config(website)
+        if not nginx_result['success']:
+            return nginx_result
         
-        # Enable site and reload web server
+        # Enable site and reload web servers
         enable_result = enable_website(website)
         if not enable_result['success']:
             return enable_result
@@ -97,7 +99,7 @@ phpinfo();
         return {'success': False, 'error': str(e)}
 
 
-def create_wordpress_site(website: Website) -> Dict[str, any]:
+def create_wordpress_site(website: Website, wp_email: str, wp_username: str, wp_password: str) -> Dict[str, any]:
     """Create a WordPress website."""
     try:
         # Create document root with website owner as owner
@@ -134,16 +136,23 @@ def create_wordpress_site(website: Website) -> Dict[str, any]:
         if not wp_config_result['success']:
             return wp_config_result
         
-        # Generate web server configuration
-        if website.web_server == Website.WEB_SERVER_NGINX:
-            config_result = create_nginx_config(website)
-        else:
-            config_result = create_apache_config(website)
+        # Auto-install WordPress with admin credentials
+        install_result = install_wordpress(website, wp_email, wp_username, wp_password)
+        if not install_result['success']:
+            return install_result
         
-        if not config_result['success']:
-            return config_result
+        # Generate web server configuration - always use Apache with Nginx reverse proxy
+        # Create Apache config first
+        apache_result = create_apache_config(website)
+        if not apache_result['success']:
+            return apache_result
         
-        # Enable site and reload web server
+        # Create Nginx reverse proxy config
+        nginx_result = create_nginx_reverse_proxy_config(website)
+        if not nginx_result['success']:
+            return nginx_result
+        
+        # Enable site and reload web servers
         enable_result = enable_website(website)
         if not enable_result['success']:
             return enable_result
@@ -317,9 +326,9 @@ def create_nginx_config(website: Website) -> Dict[str, any]:
 
 
 def create_apache_config(website: Website) -> Dict[str, any]:
-    """Create Apache virtual host configuration."""
+    """Create Apache virtual host configuration (runs on port 8080 for Nginx reverse proxy)."""
     try:
-        config_content = f"""<VirtualHost *:80>
+        config_content = f"""<VirtualHost *:8080>
     ServerName {website.domain}
     ServerAlias www.{website.domain}
     DocumentRoot {website.root_path}
@@ -345,38 +354,147 @@ def create_apache_config(website: Website) -> Dict[str, any]:
         return {'success': False, 'error': str(e)}
 
 
-def enable_website(website: Website) -> Dict[str, any]:
-    """Enable website by creating symlink and reloading web server."""
+def create_nginx_reverse_proxy_config(website: Website) -> Dict[str, any]:
+    """Create Nginx reverse proxy configuration (proxies to Apache on port 8080)."""
     try:
-        if website.web_server == Website.WEB_SERVER_NGINX:
-            # Create symlink for Nginx
-            source = os.path.join(settings.SKYDOCK_NGINX_SITES_AVAILABLE, website.domain)
-            target = os.path.join(settings.SKYDOCK_NGINX_SITES_ENABLED, website.domain)
-            
-            if os.path.exists(target):
-                os.remove(target)
-            os.symlink(source, target)
-            
-            # Test and reload Nginx
-            exit_code, stdout, stderr = run_command(['nginx', '-t'], sudo=True)
-            if exit_code != 0:
-                return {'success': False, 'error': f'Nginx config test failed: {stderr}'}
-            
-            exit_code, stdout, stderr = run_command(['systemctl', 'reload', 'nginx'], sudo=True)
-            if exit_code != 0:
-                return {'success': False, 'error': f'Failed to reload Nginx: {stderr}'}
-        else:
-            # Enable Apache site
-            exit_code, stdout, stderr = run_command([
-                'a2ensite', f"{website.domain}.conf"
-            ], sudo=True)
-            
-            if exit_code != 0:
-                return {'success': False, 'error': f'Failed to enable Apache site: {stderr}'}
-            
-            exit_code, stdout, stderr = run_command(['systemctl', 'reload', 'apache2'], sudo=True)
-            if exit_code != 0:
-                return {'success': False, 'error': f'Failed to reload Apache: {stderr}'}
+        config_content = f"""server {{
+    listen 80;
+    server_name {website.domain} www.{website.domain};
+    
+    access_log /var/log/nginx/{website.domain}-access.log;
+    error_log /var/log/nginx/{website.domain}-error.log;
+
+    location / {{
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port $server_port;
+    }}
+}}
+"""
+        config_path = os.path.join(settings.SKYDOCK_NGINX_SITES_AVAILABLE, website.domain)
+        
+        with open(config_path, 'w') as f:
+            f.write(config_content)
+        
+        return {'success': True, 'config_path': config_path}
+    except Exception as e:
+        logger.error(f"Error creating Nginx reverse proxy config: {e}")
+        return {'success': False, 'error': str(e)}
+
+
+def install_wordpress(website: Website, wp_email: str, wp_username: str, wp_password: str) -> Dict[str, any]:
+    """Auto-install WordPress using WP-CLI or direct database setup."""
+    try:
+        # Check if WP-CLI is available
+        wp_cli_path = '/usr/local/bin/wp'
+        if not os.path.exists(wp_cli_path):
+            # Try to find wp in PATH
+            exit_code, stdout, stderr = run_command(['which', 'wp'], sudo=False)
+            if exit_code == 0:
+                wp_cli_path = stdout.strip()
+            else:
+                # Install WP-CLI
+                logger.info("Installing WP-CLI...")
+                install_wp_cli_result = install_wp_cli()
+                if not install_wp_cli_result['success']:
+                    return {'success': False, 'error': 'Failed to install WP-CLI'}
+                wp_cli_path = '/usr/local/bin/wp'
+        
+        # Run WordPress installation via WP-CLI
+        install_cmd = [
+            wp_cli_path,
+            'core',
+            'install',
+            '--url=http://' + website.domain,
+            '--title=' + website.domain,
+            '--admin_user=' + wp_username,
+            '--admin_password=' + wp_password,
+            '--admin_email=' + wp_email,
+            '--path=' + website.root_path,
+            '--allow-root'
+        ]
+        
+        exit_code, stdout, stderr = run_command(install_cmd, sudo=True, cwd=website.root_path)
+        
+        if exit_code != 0:
+            logger.error(f"WP-CLI install failed: {stderr}")
+            return {'success': False, 'error': f'WordPress installation failed: {stderr}'}
+        
+        logger.info(f"WordPress installed successfully for {website.domain}")
+        return {'success': True}
+        
+    except Exception as e:
+        logger.error(f"Error installing WordPress: {e}")
+        return {'success': False, 'error': str(e)}
+
+
+def install_wp_cli() -> Dict[str, any]:
+    """Install WP-CLI if not already installed."""
+    try:
+        wp_cli_path = '/usr/local/bin/wp'
+        if os.path.exists(wp_cli_path):
+            return {'success': True}
+        
+        # Download WP-CLI
+        exit_code, stdout, stderr = run_command([
+            'curl', '-O', 'https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar'
+        ], sudo=True, cwd='/tmp')
+        
+        if exit_code != 0:
+            return {'success': False, 'error': 'Failed to download WP-CLI'}
+        
+        # Make executable and move to /usr/local/bin
+        run_command(['chmod', '+x', '/tmp/wp-cli.phar'], sudo=True)
+        run_command(['mv', '/tmp/wp-cli.phar', wp_cli_path], sudo=True)
+        
+        return {'success': True}
+    except Exception as e:
+        logger.error(f"Error installing WP-CLI: {e}")
+        return {'success': False, 'error': str(e)}
+
+
+def enable_website(website: Website) -> Dict[str, any]:
+    """Enable website by creating symlinks and reloading web servers (Nginx + Apache)."""
+    try:
+        # Always enable both Nginx (reverse proxy) and Apache (backend)
+        
+        # Enable Apache site
+        exit_code, stdout, stderr = run_command([
+            'a2ensite', f"{website.domain}.conf"
+        ], sudo=True)
+        
+        if exit_code != 0:
+            return {'success': False, 'error': f'Failed to enable Apache site: {stderr}'}
+        
+        # Test and reload Apache
+        exit_code, stdout, stderr = run_command(['apache2ctl', 'configtest'], sudo=True)
+        if exit_code != 0:
+            return {'success': False, 'error': f'Apache config test failed: {stderr}'}
+        
+        exit_code, stdout, stderr = run_command(['systemctl', 'reload', 'apache2'], sudo=True)
+        if exit_code != 0:
+            return {'success': False, 'error': f'Failed to reload Apache: {stderr}'}
+        
+        # Enable Nginx site (reverse proxy)
+        source = os.path.join(settings.SKYDOCK_NGINX_SITES_AVAILABLE, website.domain)
+        target = os.path.join(settings.SKYDOCK_NGINX_SITES_ENABLED, website.domain)
+        
+        if os.path.exists(target):
+            os.remove(target)
+        os.symlink(source, target)
+        
+        # Test and reload Nginx
+        exit_code, stdout, stderr = run_command(['nginx', '-t'], sudo=True)
+        if exit_code != 0:
+            return {'success': False, 'error': f'Nginx config test failed: {stderr}'}
+        
+        exit_code, stdout, stderr = run_command(['systemctl', 'reload', 'nginx'], sudo=True)
+        if exit_code != 0:
+            return {'success': False, 'error': f'Failed to reload Nginx: {stderr}'}
         
         return {'success': True}
     except Exception as e:
@@ -385,27 +503,28 @@ def enable_website(website: Website) -> Dict[str, any]:
 
 
 def disable_website(website: Website) -> Dict[str, any]:
-    """Disable website by removing symlink and reloading web server."""
+    """Disable website by removing symlinks and reloading web servers (Nginx + Apache)."""
     try:
-        if website.web_server == Website.WEB_SERVER_NGINX:
-            target = os.path.join(settings.SKYDOCK_NGINX_SITES_ENABLED, website.domain)
-            if os.path.exists(target):
-                os.remove(target)
-            
-            exit_code, stdout, stderr = run_command(['systemctl', 'reload', 'nginx'], sudo=True)
-            if exit_code != 0:
-                return {'success': False, 'error': f'Failed to reload Nginx: {stderr}'}
-        else:
-            exit_code, stdout, stderr = run_command([
-                'a2dissite', f"{website.domain}.conf"
-            ], sudo=True)
-            
-            if exit_code != 0:
-                return {'success': False, 'error': f'Failed to disable Apache site: {stderr}'}
-            
-            exit_code, stdout, stderr = run_command(['systemctl', 'reload', 'apache2'], sudo=True)
-            if exit_code != 0:
-                return {'success': False, 'error': f'Failed to reload Apache: {stderr}'}
+        # Disable Apache site
+        exit_code, stdout, stderr = run_command([
+            'a2dissite', f"{website.domain}.conf"
+        ], sudo=True)
+        
+        if exit_code != 0:
+            return {'success': False, 'error': f'Failed to disable Apache site: {stderr}'}
+        
+        exit_code, stdout, stderr = run_command(['systemctl', 'reload', 'apache2'], sudo=True)
+        if exit_code != 0:
+            return {'success': False, 'error': f'Failed to reload Apache: {stderr}'}
+        
+        # Disable Nginx site
+        target = os.path.join(settings.SKYDOCK_NGINX_SITES_ENABLED, website.domain)
+        if os.path.exists(target):
+            os.remove(target)
+        
+        exit_code, stdout, stderr = run_command(['systemctl', 'reload', 'nginx'], sudo=True)
+        if exit_code != 0:
+            return {'success': False, 'error': f'Failed to reload Nginx: {stderr}'}
         
         return {'success': True}
     except Exception as e:

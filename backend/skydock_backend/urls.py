@@ -12,6 +12,7 @@ urlpatterns = [
     path('api/servers/', include('servers.urls')),
     path('api/websites/', include('websites.urls')),
     path('api/installer/', include('installer.urls')),
+    path('api/settings/', include('skydock_backend.settings_urls')),
     # Frontend pages
     path('login/', views.login_view, name='login'),
     path('logout/', views.logout_page, name='logout'),

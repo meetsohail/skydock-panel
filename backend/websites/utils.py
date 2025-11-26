@@ -789,9 +789,16 @@ def enable_website(website: Website) -> Dict[str, any]:
         source = os.path.join(settings.SKYDOCK_NGINX_SITES_AVAILABLE, website.domain)
         target = os.path.join(settings.SKYDOCK_NGINX_SITES_ENABLED, website.domain)
         
-        if os.path.exists(target):
-            os.remove(target)
-        os.symlink(source, target)
+        # Remove existing symlink if it exists (using sudo)
+        exit_code, stdout, stderr = run_command(['rm', '-f', target], sudo=True)
+        
+        # Create symlink using sudo
+        exit_code, stdout, stderr = run_command([
+            'ln', '-s', source, target
+        ], sudo=True)
+        
+        if exit_code != 0:
+            return {'success': False, 'error': f'Failed to create Nginx symlink: {stderr}'}
         
         # Test and reload Nginx
         exit_code, stdout, stderr = run_command(['nginx', '-t'], sudo=True)
@@ -825,8 +832,8 @@ def disable_website(website: Website) -> Dict[str, any]:
         
         # Disable Nginx site
         target = os.path.join(settings.SKYDOCK_NGINX_SITES_ENABLED, website.domain)
-        if os.path.exists(target):
-            os.remove(target)
+        # Remove symlink using sudo
+        exit_code, stdout, stderr = run_command(['rm', '-f', target], sudo=True)
         
         exit_code, stdout, stderr = run_command(['systemctl', 'reload', 'nginx'], sudo=True)
         if exit_code != 0:

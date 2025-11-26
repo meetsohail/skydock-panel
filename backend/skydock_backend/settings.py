@@ -117,6 +117,12 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # Custom User Model
 AUTH_USER_MODEL = 'accounts.User'
 
+# Authentication backends - use system user authentication
+AUTHENTICATION_BACKENDS = [
+    'accounts.backends.SystemUserBackend',  # System user authentication
+    'django.contrib.auth.backends.ModelBackend',  # Fallback for admin
+]
+
 # REST Framework settings
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
@@ -133,11 +139,30 @@ REST_FRAMEWORK = {
 CORS_ALLOWED_ORIGINS = env.list('CORS_ALLOWED_ORIGINS', default=[])
 CORS_ALLOW_CREDENTIALS = True
 
-# Security settings for production
+# CSRF settings - allow HTTP for development
+# CSRF_COOKIE_SECURE should be False for HTTP access
+CSRF_COOKIE_SECURE = False
+CSRF_COOKIE_HTTPONLY = False
+CSRF_USE_SESSIONS = False
+CSRF_TRUSTED_ORIGINS = env.list('CSRF_TRUSTED_ORIGINS', default=[])
+# In development, we'll allow all origins (empty list means Django will check Referer header)
+if DEBUG and not CSRF_TRUSTED_ORIGINS:
+    # Don't set to ['*'], just leave it empty for development
+    pass
+
+# Session settings
+SESSION_COOKIE_SECURE = False  # Allow HTTP cookies
+SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SAMESITE = 'Lax'
+
+# Security settings for production (only if HTTPS is enabled)
 if not DEBUG:
     SECURE_SSL_REDIRECT = env.bool('SECURE_SSL_REDIRECT', default=False)
-    SESSION_COOKIE_SECURE = True
-    CSRF_COOKIE_SECURE = True
+    if SECURE_SSL_REDIRECT:
+        SESSION_COOKIE_SECURE = True
+        CSRF_COOKIE_SECURE = True
+        # Set trusted origins for HTTPS
+        CSRF_TRUSTED_ORIGINS = env.list('CSRF_TRUSTED_ORIGINS', default=[])
 
 # SkyDock Panel specific settings
 SKYDOCK_PANEL_PORT = env.int('SKYDOCK_PANEL_PORT', default=8080)

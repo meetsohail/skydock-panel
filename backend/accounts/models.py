@@ -22,13 +22,16 @@ def get_encryption_key() -> bytes:
 
 
 class User(AbstractUser):
-    """Custom user model with username for login."""
-    email = models.EmailField(unique=True, blank=True, null=True)
+    """
+    Custom user model that syncs with system users.
+    Passwords are not stored - authentication is done against system users.
+    """
+    email = models.EmailField(unique=False, blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     USERNAME_FIELD = 'username'
-    REQUIRED_FIELDS = ['email']
+    REQUIRED_FIELDS = []  # No required fields since we sync from system
 
     class Meta:
         db_table = 'accounts_user'
@@ -36,7 +39,22 @@ class User(AbstractUser):
         verbose_name_plural = 'Users'
 
     def __str__(self) -> str:
-        return self.email
+        return self.username
+    
+    def set_password(self, raw_password):
+        """
+        Override set_password - we don't store passwords.
+        Passwords are managed via system (passwd command).
+        """
+        # Do nothing - passwords are managed by system
+        pass
+    
+    def check_password(self, raw_password):
+        """
+        Override check_password - authentication is handled by backend.
+        """
+        # This should not be called directly, backend handles it
+        return False
 
 
 class SSHProfile(models.Model):

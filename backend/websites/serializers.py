@@ -17,12 +17,13 @@ class DatabaseCredentialSerializer(serializers.ModelSerializer):
 class WebsiteSerializer(serializers.ModelSerializer):
     """Serializer for Website model."""
     database = DatabaseCredentialSerializer(read_only=True)
+    user = serializers.StringRelatedField(read_only=True)
     
     class Meta:
         model = Website
         fields = [
-            'id', 'domain', 'root_path', 'type', 'web_server',
+            'id', 'user', 'domain', 'root_path', 'type', 'web_server',
             'php_version', 'status', 'created_at', 'updated_at', 'database'
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'user', 'created_at', 'updated_at']
 

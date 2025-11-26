@@ -5,8 +5,10 @@ from django.shortcuts import render, redirect
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth import login, logout
 from django.contrib import messages
+from django.views.decorators.csrf import ensure_csrf_cookie
 
 
+@ensure_csrf_cookie
 def login_view(request):
     """Login page view."""
     if request.user.is_authenticated:
@@ -14,6 +16,7 @@ def login_view(request):
     
     if request.method == 'POST':
         from django.contrib.auth import authenticate
+        
         username = request.POST.get('username')
         password = request.POST.get('password')
         

@@ -14,14 +14,15 @@ from .utils import create_php_site, create_wordpress_site, disable_website
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
 def websites_list(request):
-    """List all websites or create a new one."""
+    """List all websites for the current user or create a new one."""
     if request.method == 'GET':
-        websites = Website.objects.all()
+        # Only show websites belonging to the current user
+        websites = Website.objects.filter(user=request.user)
         serializer = WebsiteSerializer(websites, many=True)
         return Response(serializer.data)
     
     elif request.method == 'POST':
-        # Create new website
+        # Create new website for the current user
         domain = request.data.get('domain')
         website_type = request.data.get('type', Website.TYPE_PHP)
         web_server = request.data.get('web_server', Website.WEB_SERVER_NGINX)
@@ -33,11 +34,19 @@ def websites_list(request):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Generate root path
-        root_path = os.path.join(settings.SKYDOCK_WEB_ROOT, domain)
+        # Check if user already has a website with this domain
+        if Website.objects.filter(user=request.user, domain=domain).exists():
+            return Response(
+                {'error': 'You already have a website with this domain'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Generate root path - use username in path for organization
+        root_path = os.path.join(settings.SKYDOCK_WEB_ROOT, request.user.username, domain)
         
         # Create website record
         website = Website.objects.create(
+            user=request.user,
             domain=domain,
             root_path=root_path,
             type=website_type,
@@ -63,12 +72,13 @@ def websites_list(request):
 @api_view(['GET', 'PUT', 'DELETE'])
 @permission_classes([IsAuthenticated])
 def website_detail(request, website_id: int):
-    """Get, update, or delete a website."""
+    """Get, update, or delete a website (only if owned by current user)."""
     try:
-        website = Website.objects.get(id=website_id)
+        # Only allow access to websites owned by the current user
+        website = Website.objects.get(id=website_id, user=request.user)
     except Website.DoesNotExist:
         return Response(
-            {'error': 'Website not found'},
+            {'error': 'Website not found or you do not have permission to access it'},
             status=status.HTTP_404_NOT_FOUND
         )
     
@@ -79,7 +89,8 @@ def website_detail(request, website_id: int):
     elif request.method == 'PUT':
         serializer = WebsiteSerializer(website, data=request.data, partial=True)
         if serializer.is_valid():
-            serializer.save()
+            # Ensure user cannot be changed
+            serializer.save(user=request.user)
             return Response(serializer.data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
@@ -93,12 +104,13 @@ def website_detail(request, website_id: int):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def website_toggle_status(request, website_id: int):
-    """Enable or disable a website."""
+    """Enable or disable a website (only if owned by current user)."""
     try:
-        website = Website.objects.get(id=website_id)
+        # Only allow access to websites owned by the current user
+        website = Website.objects.get(id=website_id, user=request.user)
     except Website.DoesNotExist:
         return Response(
-            {'error': 'Website not found'},
+            {'error': 'Website not found or you do not have permission to access it'},
             status=status.HTTP_404_NOT_FOUND
         )
     

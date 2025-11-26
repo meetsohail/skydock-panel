@@ -8,10 +8,11 @@ from .models import Website, DatabaseCredential
 @admin.register(Website)
 class WebsiteAdmin(admin.ModelAdmin):
     """Admin interface for Website model."""
-    list_display = ['domain', 'type', 'web_server', 'php_version', 'status', 'created_at']
-    list_filter = ['type', 'web_server', 'status', 'created_at']
-    search_fields = ['domain']
+    list_display = ['domain', 'user', 'type', 'web_server', 'php_version', 'status', 'created_at']
+    list_filter = ['type', 'web_server', 'status', 'user', 'created_at']
+    search_fields = ['domain', 'user__username']
     readonly_fields = ['created_at', 'updated_at']
+    raw_id_fields = ['user']
 
 
 @admin.register(DatabaseCredential)

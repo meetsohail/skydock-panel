@@ -20,17 +20,32 @@ def generate_password(length: int = 16) -> str:
     return ''.join(secrets.choice(alphabet) for _ in range(length))
 
 
-def create_directory(path: str) -> bool:
-    """Create directory with proper permissions."""
+def create_directory(path: str, owner_user: Optional[str] = None) -> bool:
+    """Create directory with proper permissions.
+    
+    Args:
+        path: Directory path to create
+        owner_user: Username to set as owner (defaults to www-data for web server access)
+    """
     try:
         os.makedirs(path, exist_ok=True)
-        # Set ownership to www-data (or current user)
-        exit_code, _, _ = run_command(['chown', '-R', 'www-data:www-data', path], sudo=True)
-        if exit_code != 0:
-            # Try with current user if www-data doesn't exist
-            import getpass
-            current_user = getpass.getuser()
-            run_command(['chown', '-R', f'{current_user}:{current_user}', path], sudo=True)
+        
+        # Set ownership - prefer owner_user if provided, otherwise use www-data
+        if owner_user:
+            # Set owner to the user, group to www-data for web server access
+            exit_code, _, _ = run_command(['chown', '-R', f'{owner_user}:www-data', path], sudo=True)
+            if exit_code != 0:
+                # Fallback to user:user if www-data group doesn't exist
+                run_command(['chown', '-R', f'{owner_user}:{owner_user}', path], sudo=True)
+        else:
+            # Default: www-data ownership for web server
+            exit_code, _, _ = run_command(['chown', '-R', 'www-data:www-data', path], sudo=True)
+            if exit_code != 0:
+                # Try with current user if www-data doesn't exist
+                import getpass
+                current_user = getpass.getuser()
+                run_command(['chown', '-R', f'{current_user}:{current_user}', path], sudo=True)
+        
         run_command(['chmod', '-R', '755', path], sudo=True)
         return True
     except Exception as e:
@@ -41,8 +56,9 @@ def create_directory(path: str) -> bool:
 def create_php_site(website: Website) -> Dict[str, any]:
     """Create a PHP website."""
     try:
-        # Create document root
-        if not create_directory(website.root_path):
+        # Create document root with website owner as owner
+        owner_username = website.user.username if website.user else None
+        if not create_directory(website.root_path, owner_user=owner_username):
             return {'success': False, 'error': 'Failed to create document root'}
         
         # Create example index.php
@@ -56,8 +72,9 @@ phpinfo();
         with open(index_path, 'w') as f:
             f.write(index_content)
         
-        # Set permissions
-        run_command(['chown', '-R', 'www-data:www-data', website.root_path], sudo=True)
+        # Set permissions (already set by create_directory, but ensure consistency)
+        owner_username = website.user.username if website.user else 'www-data'
+        run_command(['chown', '-R', f'{owner_username}:www-data', website.root_path], sudo=True)
         run_command(['chmod', '-R', '755', website.root_path], sudo=True)
         
         # Generate web server configuration
@@ -83,8 +100,9 @@ phpinfo();
 def create_wordpress_site(website: Website) -> Dict[str, any]:
     """Create a WordPress website."""
     try:
-        # Create document root
-        if not create_directory(website.root_path):
+        # Create document root with website owner as owner
+        owner_username = website.user.username if website.user else None
+        if not create_directory(website.root_path, owner_user=owner_username):
             return {'success': False, 'error': 'Failed to create document root'}
         
         # Create database and user

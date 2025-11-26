@@ -3,10 +3,11 @@ Websites app models for SkyDock Panel.
 """
 from django.db import models
 from django.core.validators import MinLengthValidator
+from django.conf import settings
 
 
 class Website(models.Model):
-    """Website model."""
+    """Website model - each website belongs to a user."""
     TYPE_PHP = 'php'
     TYPE_WORDPRESS = 'wordpress'
     TYPE_CHOICES = [
@@ -28,7 +29,13 @@ class Website(models.Model):
         (STATUS_DISABLED, 'Disabled'),
     ]
     
-    domain = models.CharField(max_length=255, unique=True, validators=[MinLengthValidator(3)])
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='websites',
+        help_text="Owner of this website"
+    )
+    domain = models.CharField(max_length=255, validators=[MinLengthValidator(3)])
     root_path = models.CharField(max_length=500, help_text="Document root path")
     type = models.CharField(max_length=20, choices=TYPE_CHOICES, default=TYPE_PHP)
     web_server = models.CharField(max_length=20, choices=WEB_SERVER_CHOICES, default=WEB_SERVER_NGINX)
@@ -36,6 +43,14 @@ class Website(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_ACTIVE)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'websites_website'
+        verbose_name = 'Website'
+        verbose_name_plural = 'Websites'
+        ordering = ['-created_at']
+        # Domain must be unique per user, not globally
+        unique_together = [['user', 'domain']]
 
     class Meta:
         db_table = 'websites_website'

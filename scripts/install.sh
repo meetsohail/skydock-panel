@@ -82,16 +82,11 @@ check_fresh_server() {
     fi
     
     # Check for incomplete SkyDock installation
+    # If directory exists but isn't valid, we'll handle it in clone_repository by backing it up
     if [ -d "$SKYDOCK_HOME" ] && [ ! -f "$SKYDOCK_HOME/backend/manage.py" ]; then
-        log_error "=========================================="
-        log_error "ERROR: Incomplete SkyDock Panel installation detected!"
-        log_error "=========================================="
-        log_error ""
-        log_error "Directory $SKYDOCK_HOME exists but is not a valid SkyDock Panel installation."
-        log_error "Please remove it manually and try again:"
-        log_error "  rm -rf $SKYDOCK_HOME"
-        log_error ""
-        exit 1
+        log_warn "Directory $SKYDOCK_HOME exists but is not a valid SkyDock Panel installation."
+        log_warn "The installer will back it up and create a fresh installation."
+        # Don't exit - let clone_repository handle it
     fi
     
     # Check for other web panels or conflicting applications
@@ -166,8 +161,7 @@ install_dependencies() {
         gnupg \
         lsb-release
     
-    # Note: Nginx is not installed - panel runs directly on port 2083
-    log_info "System dependencies installed (Nginx not installed - panel runs directly on port $SKYDOCK_PORT)"
+    log_info "System dependencies installed"
 }
 
 create_skydock_user() {
@@ -181,18 +175,14 @@ create_skydock_user() {
 }
 
 setup_github_ssh() {
-    log_info "Setting up GitHub SSH host key..."
-    
     # Create .ssh directory if it doesn't exist
     mkdir -p ~/.ssh
     chmod 700 ~/.ssh
     
     # Add GitHub to known_hosts if not already present
     if ! grep -q "github.com" ~/.ssh/known_hosts 2>/dev/null; then
-        log_info "Adding GitHub to known_hosts..."
         ssh-keyscan -t rsa,ecdsa,ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
         chmod 600 ~/.ssh/known_hosts
-        log_info "GitHub SSH host key added"
     fi
 }
 
@@ -223,9 +213,6 @@ clone_repository() {
     if check_skydock_installed && [ -d "$SKYDOCK_HOME/.git" ]; then
         log_info "SkyDock Panel is already installed. Updating code..."
         
-        # Configure git for skydock user BEFORE any git operations
-        log_info "Configuring Git for $SKYDOCK_USER user..."
-        
         # Setup GitHub SSH for skydock user
         sudo -u "$SKYDOCK_USER" -H bash -c "
             mkdir -p ~/.ssh
@@ -241,19 +228,15 @@ clone_repository() {
         sudo -u "$SKYDOCK_USER" -H git config --global --add safe.directory "*" 2>/dev/null || true
         
         # Run all git commands as skydock user to avoid ownership issues
-        log_info "Updating repository..."
-        
         # Stash any local changes
         sudo -u "$SKYDOCK_USER" -H bash -c "cd '$SKYDOCK_HOME' && GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=accept-new' git stash > /dev/null 2>&1 || true"
         
         # Pull latest changes
-        if sudo -u "$SKYDOCK_USER" -H bash -c "cd '$SKYDOCK_HOME' && GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=accept-new' git pull origin '$BRANCH'"; then
-            log_info "Repository updated successfully"
+        if sudo -u "$SKYDOCK_USER" -H bash -c "cd '$SKYDOCK_HOME' && GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=accept-new' git pull origin '$BRANCH'" >/dev/null 2>&1; then
+            :
         else
-            log_warn "SSH pull failed, trying HTTPS..."
             # Try HTTPS as fallback
-            if sudo -u "$SKYDOCK_USER" -H bash -c "cd '$SKYDOCK_HOME' && git remote set-url origin '$REPO_URL_HTTPS' && git pull origin '$BRANCH'"; then
-                log_info "Repository updated successfully via HTTPS"
+            if sudo -u "$SKYDOCK_USER" -H bash -c "cd '$SKYDOCK_HOME' && git remote set-url origin '$REPO_URL_HTTPS' && git pull origin '$BRANCH'" >/dev/null 2>&1; then
             else
                 log_error "Failed to update repository. Please check:"
                 log_error "  1. Repository URL is correct"
@@ -265,14 +248,12 @@ clone_repository() {
         fi
     elif [ ! -d "$SKYDOCK_HOME" ]; then
         # Clone if directory doesn't exist (fresh install or after backup)
-        log_info "Cloning repository..."
         # Try SSH clone first (with auto-accept host key)
         if GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=accept-new" git clone -b "$BRANCH" "$REPO_URL" "$SKYDOCK_HOME" 2>/dev/null; then
-            log_info "Repository cloned via SSH"
+            :
         else
-            log_warn "SSH clone failed, trying HTTPS..."
-            if git clone -b "$BRANCH" "$REPO_URL_HTTPS" "$SKYDOCK_HOME"; then
-                log_info "Repository cloned via HTTPS"
+            # Try HTTPS as fallback
+            if git clone -b "$BRANCH" "$REPO_URL_HTTPS" "$SKYDOCK_HOME" >/dev/null 2>&1; then
             else
                 log_error "Failed to clone repository. Please check:"
                 log_error "  1. Repository URL is correct"
@@ -303,7 +284,6 @@ clone_repository() {
     git config --global --add safe.directory "$SKYDOCK_HOME" 2>/dev/null || true
     
     chown -R "$SKYDOCK_USER:$SKYDOCK_USER" "$SKYDOCK_HOME"
-    log_info "Repository setup complete"
 }
 
 setup_python_venv() {
@@ -382,18 +362,22 @@ EOF
     
     # Run migrations
     log_info "Running Django migrations..."
-    if python manage.py migrate --noinput 2>&1; then
-        log_info "Migrations completed successfully"
+    # First, make migrations to ensure all migration files exist
+    python manage.py makemigrations --noinput >/dev/null 2>&1 || true
+    
+    # Now run migrations
+    if python manage.py migrate --noinput >/dev/null 2>&1; then
+        :
     else
         log_error "Migration failed. Please check the error above."
+        python manage.py showmigrations 2>&1 || true
         exit 1
     fi
     
     # Verify migrations were successful by checking if database file exists and has tables
-    log_info "Verifying database setup..."
     if [ -f "db.sqlite3" ]; then
         # Check if database has tables using a simple Python script
-        python3 << 'VERIFY_EOF'
+        python3 << 'VERIFY_EOF' >/dev/null 2>&1
 import sqlite3
 import sys
 
@@ -409,74 +393,25 @@ try:
     found_tables = [t for t in essential_tables if t in tables]
     
     if len(found_tables) >= 1:  # At least one essential table
-        print(f"SUCCESS: Database has {len(tables)} tables")
         sys.exit(0)
     else:
-        print(f"WARNING: Essential tables not found. Available: {tables}", file=sys.stderr)
         sys.exit(1)
 except Exception as e:
-    print(f"ERROR: {e}", file=sys.stderr)
     sys.exit(1)
 VERIFY_EOF
         
-        if [ $? -eq 0 ]; then
-            log_info "Database verification successful"
-        else
+        if [ $? -ne 0 ]; then
             log_warn "Database verification warning, but continuing..."
         fi
-    else
-        log_warn "Database file not found yet, but continuing..."
     fi
     
-    # Create superuser only if it doesn't exist (new installation)
-    if [ "$is_update" = false ]; then
-        log_info "Creating admin user..."
-        ADMIN_EMAIL="admin@skydock.local"
-        ADMIN_PASSWORD=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
-        
-        # Use Django management command to create superuser (more reliable)
-        ADMIN_USERNAME="admin"
-        python manage.py shell << EOF
-import sys
-import os
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'skydock_backend.settings')
-import django
-django.setup()
-
-from accounts.models import User
-try:
-    if not User.objects.filter(username='$ADMIN_USERNAME').exists():
-        user = User.objects.create_superuser('$ADMIN_USERNAME', '$ADMIN_EMAIL', '$ADMIN_PASSWORD')
-        print('Admin user created successfully')
-    else:
-        print('Admin user already exists')
-except Exception as e:
-    print(f'Error creating admin user: {e}', file=sys.stderr)
-    import traceback
-    traceback.print_exc()
-    sys.exit(1)
-EOF
-        
-        if [ $? -eq 0 ]; then
-            log_info "Admin credentials:"
-            log_info "  Username: $ADMIN_USERNAME"
-            log_info "  Password: $ADMIN_PASSWORD"
-        else
-            log_warn "Failed to create admin user, but continuing installation..."
-        fi
-    else
-        log_info "Skipping admin user creation (update mode)"
-    fi
+    # Note: Users are authenticated against system users, not database
+    # No need to create database users - any system user can login
+    log_info "Authentication uses system users (from /etc/passwd)"
     
     # Collect static files
     log_info "Collecting static files..."
-    if python manage.py collectstatic --noinput; then
-        log_info "Static files collected"
-    else
-        log_warn "Static file collection had warnings, but continuing..."
-    fi
-    
-    log_info "Django setup complete"
+    python manage.py collectstatic --noinput >/dev/null 2>&1 || true
 }
 
 setup_systemd() {
@@ -538,11 +473,9 @@ EOF
 }
 
 setup_nginx() {
-    log_info "Skipping Nginx configuration - panel runs directly on port $SKYDOCK_PORT"
     # Remove any existing Nginx configuration for SkyDock Panel
     rm -f /etc/nginx/sites-enabled/skydock-panel
     rm -f /etc/nginx/sites-available/skydock-panel
-    log_info "Panel will be accessible directly at http://your-server-ip:$SKYDOCK_PORT"
 }
 
 setup_firewall() {
@@ -632,24 +565,22 @@ main() {
     fi
     
     # Show direct access URL on port 2083
-    log_info "Access the panel at: http://$SERVER_IP:$SKYDOCK_PORT"
+    log_info "Access the panel at:"
+    log_info "  http://$SERVER_IP:$SKYDOCK_PORT"
     log_info ""
     
-    log_info "If you see 'Not Found' errors, check:"
-    log_info "  1. Service status: systemctl status skydock-panel"
-    log_info "  2. Service logs: journalctl -u skydock-panel -n 50"
-    log_info "  3. Port is open: netstat -tlnp | grep $SKYDOCK_PORT"
-    log_info "  4. Try accessing: http://$SERVER_IP:$SKYDOCK_PORT/login/"
-    log_info ""
+    # Show login information
     if [ "$is_update" = false ]; then
-        log_info "Admin credentials:"
-        log_info "  Username: admin"
-        log_info "  Password: (check output above)"
+        log_info "Login Information:"
+        log_info "  Use any system user account to login"
+        log_info "  Example: Use 'root' or any user created with 'useradd'"
+        log_info "  Password: Use the system password (set via 'passwd' command)"
+        log_info ""
+        log_info "To create a new user:"
+        log_info "  useradd -m -s /bin/bash username"
+        log_info "  passwd username"
         log_info ""
     fi
-    log_info "Service status: systemctl status skydock-panel"
-    log_info "View logs: journalctl -u skydock-panel -f"
-    log_info ""
     
     # Disable error trap on success
     trap - ERR

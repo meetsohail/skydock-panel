@@ -5,7 +5,8 @@
 # This script installs SkyDock Panel on a fresh Ubuntu server
 ###############################################################################
 
-set -e  # Exit on error
+# Don't use set -e, we'll handle errors with trap
+set -o pipefail  # Fail on pipe errors
 
 # Colors for output
 RED='\033[0;31m'
@@ -57,75 +58,83 @@ check_os() {
     log_info "Detected OS: $PRETTY_NAME"
 }
 
+check_skydock_installed() {
+    # Check if SkyDock Panel is already installed
+    if [ -d "$SKYDOCK_HOME" ] && [ -f "$SKYDOCK_HOME/backend/manage.py" ]; then
+        return 0  # Installed
+    fi
+    return 1  # Not installed
+}
+
 check_fresh_server() {
-    log_info "Checking if server is fresh..."
+    log_info "Checking server status..."
     
     local is_fresh=true
     local warnings=()
+    local skydock_installed=false
     
-    # Check for existing web servers
-    if systemctl is-active --quiet nginx 2>/dev/null || systemctl is-active --quiet apache2 2>/dev/null; then
-        warnings+=("Web server (Nginx/Apache) is already running")
+    # Check if SkyDock Panel is already installed
+    if check_skydock_installed; then
+        skydock_installed=true
+        log_info "SkyDock Panel is already installed. Will update the installation."
+        return 0  # Allow update
+    fi
+    
+    # Check for incomplete SkyDock installation
+    if [ -d "$SKYDOCK_HOME" ] && [ ! -f "$SKYDOCK_HOME/backend/manage.py" ]; then
+        log_error "=========================================="
+        log_error "ERROR: Incomplete SkyDock Panel installation detected!"
+        log_error "=========================================="
+        log_error ""
+        log_error "Directory $SKYDOCK_HOME exists but is not a valid SkyDock Panel installation."
+        log_error "Please remove it manually and try again:"
+        log_error "  rm -rf $SKYDOCK_HOME"
+        log_error ""
+        exit 1
+    fi
+    
+    # Check for other web panels or conflicting applications
+    if systemctl list-units --type=service --state=running | grep -qiE "(cpanel|plesk|vestacp|cyberpanel|aaapanel)"; then
+        warnings+=("Another control panel is detected (cPanel/Plesk/VestaCP/CyberPanel/aaPanel)")
         is_fresh=false
     fi
     
-    # Check for existing MySQL/MariaDB with databases
-    if command -v mysql &> /dev/null; then
-        if systemctl is-active --quiet mysql 2>/dev/null || systemctl is-active --quiet mariadb 2>/dev/null; then
-            # Check if there are any databases (excluding system databases)
-            db_count=$(mysql -e "SHOW DATABASES;" 2>/dev/null | grep -v -E "^(Database|information_schema|performance_schema|mysql|sys)$" | wc -l)
-            if [ "$db_count" -gt 0 ]; then
-                warnings+=("MySQL/MariaDB is running with existing databases")
+    # Check for other Python web applications (excluding SkyDock)
+    if systemctl list-units --type=service --state=running | grep -qiE "(gunicorn|uwsgi)" | grep -v "skydock-panel"; then
+        warnings+=("Other Python web applications detected")
+        is_fresh=false
+    fi
+    
+    # Check for existing websites in /var/www (only if not SkyDock)
+    if [ -d "/var/www" ]; then
+        website_count=$(find /var/www -mindepth 1 -maxdepth 1 -type d ! -empty 2>/dev/null | wc -l)
+        if [ "$website_count" -gt 0 ]; then
+            # Check if these are SkyDock-managed sites
+            skydock_sites=$(find /var/www -mindepth 1 -maxdepth 1 -type d -exec test -f {}/.skydock \; -print 2>/dev/null | wc -l)
+            if [ "$website_count" -gt "$skydock_sites" ]; then
+                warnings+=("Existing websites found in /var/www (not managed by SkyDock)")
                 is_fresh=false
             fi
         fi
     fi
     
-    # Check for existing websites in /var/www
-    if [ -d "/var/www" ]; then
-        # Count non-empty directories (potential websites)
-        website_count=$(find /var/www -mindepth 1 -maxdepth 1 -type d ! -empty 2>/dev/null | wc -l)
-        if [ "$website_count" -gt 0 ]; then
-            warnings+=("Existing websites found in /var/www")
-            is_fresh=false
-        fi
-    fi
-    
-    # Check for existing Python web applications
-    if systemctl list-units --type=service --state=running | grep -qiE "(gunicorn|uwsgi|django|flask)"; then
-        warnings+=("Existing Python web applications detected")
-        is_fresh=false
-    fi
-    
-    # Check for existing SkyDock Panel installation or incomplete directory
-    if [ -d "$SKYDOCK_HOME" ]; then
-        if [ -f "$SKYDOCK_HOME/backend/manage.py" ]; then
-            warnings+=("SkyDock Panel appears to be already installed at $SKYDOCK_HOME")
-            is_fresh=false
-        else
-            warnings+=("Directory $SKYDOCK_HOME exists but is not a valid SkyDock Panel installation")
-            warnings+=("Please remove it manually: rm -rf $SKYDOCK_HOME")
-            is_fresh=false
-        fi
-    fi
-    
     if [ "$is_fresh" = false ]; then
         log_error "=========================================="
-        log_error "ERROR: Server is not fresh!"
+        log_error "ERROR: Server is not suitable for fresh installation!"
         log_error "=========================================="
         log_error ""
         log_error "This installer is designed for FRESH Ubuntu servers only."
-        log_error "The following issues were detected:"
+        log_error "The following conflicts were detected:"
         log_error ""
         for warning in "${warnings[@]}"; do
             log_error "  - $warning"
         done
         log_error ""
         log_error "For safety reasons, installation cannot proceed on a server"
-        log_error "with existing web services or applications."
+        log_error "with conflicting web services or applications."
         log_error ""
-        log_error "Please use a fresh Ubuntu server, or manually install SkyDock Panel"
-        log_error "by following the manual installation guide."
+        log_error "Please use a fresh Ubuntu server, or if SkyDock is already installed,"
+        log_error "the installer will update it automatically."
         log_error ""
         exit 1
     fi
@@ -170,59 +179,75 @@ create_skydock_user() {
     fi
 }
 
+setup_github_ssh() {
+    log_info "Setting up GitHub SSH host key..."
+    
+    # Create .ssh directory if it doesn't exist
+    mkdir -p ~/.ssh
+    chmod 700 ~/.ssh
+    
+    # Add GitHub to known_hosts if not already present
+    if ! grep -q "github.com" ~/.ssh/known_hosts 2>/dev/null; then
+        log_info "Adding GitHub to known_hosts..."
+        ssh-keyscan -t rsa,ecdsa,ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
+        chmod 600 ~/.ssh/known_hosts
+        log_info "GitHub SSH host key added"
+    fi
+}
+
 clone_repository() {
-    log_info "Cloning SkyDock Panel repository..."
+    log_info "Cloning/Updating SkyDock Panel repository..."
     
-    # Try SSH first, fallback to HTTPS if SSH fails
-    local clone_url="$REPO_URL"
+    # Setup GitHub SSH to avoid host key prompt
+    setup_github_ssh
     
-    if [ -d "$SKYDOCK_HOME" ]; then
-        # Check if it's a valid git repository with proper structure
-        if [ -d "$SKYDOCK_HOME/.git" ] && [ -d "$SKYDOCK_HOME/backend" ]; then
-            log_warn "Directory $SKYDOCK_HOME already exists. Updating..."
-            cd "$SKYDOCK_HOME" || {
-                log_error "Failed to change to $SKYDOCK_HOME"
+    # Configure git to automatically accept new host keys
+    export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=accept-new"
+    
+    # Check if SkyDock is already installed
+    if check_skydock_installed; then
+        log_info "SkyDock Panel is already installed. Updating code..."
+        cd "$SKYDOCK_HOME" || {
+            log_error "Failed to change to $SKYDOCK_HOME"
+            exit 1
+        }
+        
+        # Check if it's a git repository
+        if [ -d ".git" ]; then
+            # Stash any local changes
+            git stash > /dev/null 2>&1 || true
+            
+            # Pull latest changes
+            if git pull origin "$BRANCH"; then
+                log_info "Repository updated successfully"
+            else
+                log_error "Failed to update repository. Please check:"
+                log_error "  1. Repository URL is correct"
+                log_error "  2. Branch exists: $BRANCH"
+                log_error "  3. You have internet connectivity"
+                log_error "  4. No local conflicts exist"
                 exit 1
-            }
-            git pull origin "$BRANCH" || {
-                log_warn "Could not update repository, but continuing with existing installation..."
-                return 0
-            }
-            log_info "Repository updated"
+            fi
         else
-            log_warn "Directory $SKYDOCK_HOME exists but is not a valid SkyDock Panel installation."
-            log_warn "Backing up and removing existing directory..."
+            log_warn "Installation directory exists but is not a git repository."
+            log_warn "Backing up and cloning fresh..."
             BACKUP_DIR="${SKYDOCK_HOME}.backup.$(date +%s)"
             if mv "$SKYDOCK_HOME" "$BACKUP_DIR" 2>/dev/null; then
                 log_info "Backed up to $BACKUP_DIR"
+                # Continue to clone below
             else
                 log_error "Failed to backup existing directory. Please remove it manually:"
                 log_error "  rm -rf $SKYDOCK_HOME"
                 exit 1
             fi
-            
-            # Try SSH clone first
-            log_info "Attempting to clone via SSH..."
-            if git clone -b "$BRANCH" "$REPO_URL" "$SKYDOCK_HOME" 2>/dev/null; then
-                log_info "Repository cloned via SSH"
-            else
-                log_warn "SSH clone failed, trying HTTPS..."
-                if git clone -b "$BRANCH" "$REPO_URL_HTTPS" "$SKYDOCK_HOME"; then
-                    log_info "Repository cloned via HTTPS"
-                else
-                    log_error "Failed to clone repository. Please check:"
-                    log_error "  1. Repository URL is correct"
-                    log_error "  2. Branch exists: $BRANCH"
-                    log_error "  3. You have internet connectivity"
-                    log_error "  4. SSH keys are set up (for SSH) or repository is public (for HTTPS)"
-                    exit 1
-                fi
-            fi
         fi
-    else
-        # Try SSH clone first
+    fi
+    
+    # Clone if directory doesn't exist or was backed up
+    if [ ! -d "$SKYDOCK_HOME" ] || [ ! -d "$SKYDOCK_HOME/.git" ]; then
+        # Try SSH clone first (with auto-accept host key)
         log_info "Attempting to clone via SSH..."
-        if git clone -b "$BRANCH" "$REPO_URL" "$SKYDOCK_HOME" 2>/dev/null; then
+        if GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=accept-new" git clone -b "$BRANCH" "$REPO_URL" "$SKYDOCK_HOME" 2>/dev/null; then
             log_info "Repository cloned via SSH"
         else
             log_warn "SSH clone failed, trying HTTPS..."
@@ -305,6 +330,12 @@ setup_django() {
     
     source venv/bin/activate
     
+    local is_update=false
+    if [ -f .env ] && [ -f db.sqlite3 ]; then
+        is_update=true
+        log_info "Detected existing Django installation. Updating..."
+    fi
+    
     # Create .env file if it doesn't exist
     if [ ! -f .env ]; then
         log_info "Creating .env file..."
@@ -322,18 +353,26 @@ SKYDOCK_ENCRYPTION_KEY=$(python3 -c 'from cryptography.fernet import Fernet; pri
 EOF
         chown "$SKYDOCK_USER:$SKYDOCK_USER" .env
         log_info ".env file created"
+    else
+        log_info "Using existing .env file"
     fi
     
     # Run migrations
     log_info "Running Django migrations..."
-    python manage.py migrate --noinput
+    if python manage.py migrate --noinput; then
+        log_info "Migrations completed successfully"
+    else
+        log_error "Migration failed. Please check the error above."
+        exit 1
+    fi
     
-    # Create superuser if it doesn't exist
-    log_info "Creating admin user..."
-    ADMIN_EMAIL="admin@skydock.local"
-    ADMIN_PASSWORD=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
-    
-    python manage.py shell << EOF
+    # Create superuser only if it doesn't exist (new installation)
+    if [ "$is_update" = false ]; then
+        log_info "Creating admin user..."
+        ADMIN_EMAIL="admin@skydock.local"
+        ADMIN_PASSWORD=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
+        
+        python manage.py shell << EOF
 from accounts.models import User
 if not User.objects.filter(email='$ADMIN_EMAIL').exists():
     User.objects.create_superuser('$ADMIN_EMAIL', '$ADMIN_PASSWORD')
@@ -341,15 +380,23 @@ if not User.objects.filter(email='$ADMIN_EMAIL').exists():
 else:
     print('Admin user already exists')
 EOF
+        
+        log_info "Admin credentials:"
+        log_info "  Email: $ADMIN_EMAIL"
+        log_info "  Password: $ADMIN_PASSWORD"
+    else
+        log_info "Skipping admin user creation (update mode)"
+    fi
     
     # Collect static files
     log_info "Collecting static files..."
-    python manage.py collectstatic --noinput
+    if python manage.py collectstatic --noinput; then
+        log_info "Static files collected"
+    else
+        log_warn "Static file collection had warnings, but continuing..."
+    fi
     
     log_info "Django setup complete"
-    log_info "Admin credentials:"
-    log_info "  Email: $ADMIN_EMAIL"
-    log_info "  Password: $ADMIN_PASSWORD"
 }
 
 setup_systemd() {
@@ -454,12 +501,46 @@ create_web_root() {
     chmod 755 /var/www
 }
 
+handle_error() {
+    local line_number=$1
+    local error_code=$2
+    log_error ""
+    log_error "=========================================="
+    log_error "ERROR: Installation failed!"
+    log_error "=========================================="
+    log_error ""
+    log_error "Installation failed at line $line_number with exit code $error_code"
+    log_error ""
+    log_error "Please check the error messages above and try again."
+    log_error ""
+    log_error "If the issue persists, you can:"
+    log_error "  1. Check logs: journalctl -u skydock-panel -f"
+    log_error "  2. Remove incomplete installation: rm -rf $SKYDOCK_HOME"
+    log_error "  3. Review the installation guide in README.md"
+    log_error ""
+    exit $error_code
+}
+
 main() {
+    # Set error trap
+    trap 'handle_error $LINENO $?' ERR
+    
     log_info "Starting SkyDock Panel installation..."
+    
+    # Check if updating existing installation
+    local is_update=false
+    if check_skydock_installed; then
+        is_update=true
+        log_info "Detected existing SkyDock Panel installation. Updating..."
+    fi
     
     check_root
     check_os
-    check_fresh_server
+    
+    if [ "$is_update" = false ]; then
+        check_fresh_server
+    fi
+    
     install_dependencies
     create_skydock_user
     clone_repository
@@ -472,18 +553,27 @@ main() {
     
     log_info ""
     log_info "=========================================="
-    log_info "SkyDock Panel installation complete!"
+    if [ "$is_update" = true ]; then
+        log_info "SkyDock Panel update complete!"
+    else
+        log_info "SkyDock Panel installation complete!"
+    fi
     log_info "=========================================="
     log_info ""
     log_info "Access the panel at: http://$(hostname -I | awk '{print $1}')"
     log_info ""
-    log_info "Admin credentials:"
-    log_info "  Email: admin@skydock.local"
-    log_info "  Password: (check output above)"
-    log_info ""
+    if [ "$is_update" = false ]; then
+        log_info "Admin credentials:"
+        log_info "  Email: admin@skydock.local"
+        log_info "  Password: (check output above)"
+        log_info ""
+    fi
     log_info "Service status: systemctl status skydock-panel"
     log_info "View logs: journalctl -u skydock-panel -f"
     log_info ""
+    
+    # Disable error trap on success
+    trap - ERR
 }
 
 # Run main function

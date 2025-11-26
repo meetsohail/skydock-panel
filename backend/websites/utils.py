@@ -261,6 +261,7 @@ require_once ABSPATH . 'wp-settings.php';
 def create_nginx_config(website: Website) -> Dict[str, any]:
     """Create Nginx virtual host configuration."""
     try:
+        # Use raw string to avoid escape sequence warnings
         config_content = f"""server {{
     listen 80;
     server_name {website.domain} www.{website.domain};
@@ -274,14 +275,14 @@ def create_nginx_config(website: Website) -> Dict[str, any]:
         try_files $uri $uri/ /index.php?$args;
     }}
 
-    location ~ \.php$ {{
+    location ~ \\.php$ {{
         fastcgi_pass unix:/var/run/php/php{website.php_version.replace(".", "")}-fpm.sock;
         fastcgi_index index.php;
         fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
         include fastcgi_params;
     }}
 
-    location ~ /\.ht {{
+    location ~ /\\.ht {{
         deny all;
     }}
 }}

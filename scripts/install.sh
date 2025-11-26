@@ -60,6 +60,7 @@ check_os() {
 
 check_skydock_installed() {
     # Check if SkyDock Panel is already installed
+    # Use stat to check without triggering git ownership checks
     if [ -d "$SKYDOCK_HOME" ] && [ -f "$SKYDOCK_HOME/backend/manage.py" ]; then
         return 0  # Installed
     fi
@@ -204,45 +205,51 @@ clone_repository() {
     # Configure git to automatically accept new host keys
     export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=accept-new"
     
-    # CRITICAL: Configure safe.directory FIRST, before any git operations
-    # This must be done before we cd into the directory or git will check ownership
-    log_info "Configuring Git safe directory..."
-    if [ -d "$SKYDOCK_HOME" ]; then
-        # Add the directory to safe.directory list
-        if ! git config --global --get-all safe.directory 2>/dev/null | grep -Fxq "$SKYDOCK_HOME"; then
-            git config --global --add safe.directory "$SKYDOCK_HOME" || {
-                log_error "Failed to configure Git safe directory"
-                exit 1
-            }
-        fi
-        # Also add wildcard as fallback for root user
-        if ! git config --global --get-all safe.directory 2>/dev/null | grep -Fxq "*"; then
-            git config --global --add safe.directory "*" 2>/dev/null || true
-        fi
-    fi
-    
     # Check if SkyDock is already installed
     if check_skydock_installed; then
         log_info "SkyDock Panel is already installed. Updating code..."
         
+        # Configure git for skydock user BEFORE any git operations
+        log_info "Configuring Git for $SKYDOCK_USER user..."
+        
+        # Setup GitHub SSH for skydock user
+        sudo -u "$SKYDOCK_USER" -H bash -c "
+            mkdir -p ~/.ssh
+            chmod 700 ~/.ssh
+            if ! grep -q 'github.com' ~/.ssh/known_hosts 2>/dev/null; then
+                ssh-keyscan -t rsa,ecdsa,ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
+                chmod 600 ~/.ssh/known_hosts
+            fi
+        " 2>/dev/null || true
+        
+        # Configure git safe.directory for skydock user (CRITICAL - must be before any git ops)
+        sudo -u "$SKYDOCK_USER" -H git config --global --add safe.directory "$SKYDOCK_HOME" 2>/dev/null || true
+        sudo -u "$SKYDOCK_USER" -H git config --global --add safe.directory "*" 2>/dev/null || true
+        
         # Check if it's a git repository
         if [ -d "$SKYDOCK_HOME/.git" ]; then
-            # Run git commands as the skydock user to avoid ownership issues
-            log_info "Updating repository as $SKYDOCK_USER user..."
+            # Run all git commands as skydock user to avoid ownership issues
+            log_info "Updating repository..."
             
             # Stash any local changes
-            sudo -u "$SKYDOCK_USER" -H bash -c "cd '$SKYDOCK_HOME' && git stash > /dev/null 2>&1 || true"
+            sudo -u "$SKYDOCK_USER" -H bash -c "cd '$SKYDOCK_HOME' && GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=accept-new' git stash > /dev/null 2>&1 || true"
             
             # Pull latest changes
-            if sudo -u "$SKYDOCK_USER" -H bash -c "cd '$SKYDOCK_HOME' && git pull origin '$BRANCH'"; then
+            if sudo -u "$SKYDOCK_USER" -H bash -c "cd '$SKYDOCK_HOME' && GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=accept-new' git pull origin '$BRANCH'"; then
                 log_info "Repository updated successfully"
             else
-                log_error "Failed to update repository. Please check:"
-                log_error "  1. Repository URL is correct"
-                log_error "  2. Branch exists: $BRANCH"
-                log_error "  3. You have internet connectivity"
-                log_error "  4. No local conflicts exist"
-                exit 1
+                log_warn "SSH pull failed, trying HTTPS..."
+                # Try HTTPS as fallback
+                if sudo -u "$SKYDOCK_USER" -H bash -c "cd '$SKYDOCK_HOME' && git remote set-url origin '$REPO_URL_HTTPS' && git pull origin '$BRANCH'"; then
+                    log_info "Repository updated successfully via HTTPS"
+                else
+                    log_error "Failed to update repository. Please check:"
+                    log_error "  1. Repository URL is correct"
+                    log_error "  2. Branch exists: $BRANCH"
+                    log_error "  3. You have internet connectivity"
+                    log_error "  4. No local conflicts exist"
+                    exit 1
+                fi
             fi
         else
             log_warn "Installation directory exists but is not a git repository."

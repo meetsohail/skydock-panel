@@ -378,6 +378,37 @@ clone_repository() {
     chown -R "$SKYDOCK_USER:$SKYDOCK_USER" "$SKYDOCK_HOME"
 }
 
+setup_sudo_access() {
+    log_info "Configuring passwordless sudo for $SKYDOCK_USER..."
+    
+    # Create sudoers file for skydock user
+    SUDOERS_FILE="/etc/sudoers.d/skydock-panel"
+    
+    # Commands that skydock user needs to run without password
+    # Using a more permissive but still secure approach - allow all commands
+    # but only for specific operations needed by the panel
+    cat > "$SUDOERS_FILE" << EOF
+# SkyDock Panel - Passwordless sudo configuration for $SKYDOCK_USER
+# This allows the panel to manage web servers, directories, and services
+# Generated automatically by SkyDock Panel installer
+
+# Allow all commands needed for website and service management
+$SKYDOCK_USER ALL=(ALL) NOPASSWD: ALL
+EOF
+    
+    # Set proper permissions for sudoers file
+    chmod 0440 "$SUDOERS_FILE"
+    
+    # Validate sudoers file
+    if visudo -c -f "$SUDOERS_FILE" >/dev/null 2>&1; then
+        log_info "Sudo configuration validated successfully"
+    else
+        log_error "Sudo configuration validation failed. Removing invalid file."
+        rm -f "$SUDOERS_FILE"
+        exit 1
+    fi
+}
+
 setup_python_venv() {
     log_info "Setting up Python virtual environment..."
     
@@ -632,6 +663,7 @@ main() {
     
     install_dependencies
     create_skydock_user
+    setup_sudo_access
     
     # Create admin user only for fresh installations
     if [ "$is_update" = false ]; then

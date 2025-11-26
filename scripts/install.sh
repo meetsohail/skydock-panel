@@ -17,7 +17,8 @@ NC='\033[0m' # No Color
 SKYDOCK_USER="skydock"
 SKYDOCK_HOME="/opt/skydock-panel"
 SKYDOCK_PORT="8080"
-REPO_URL="https://github.com/meetsohail/skydock-panel.git"
+REPO_URL="git@github.com:meetsohail/skydock-panel.git"
+REPO_URL_HTTPS="https://github.com/meetsohail/skydock-panel.git"
 BRANCH="master"
 
 # Functions
@@ -54,6 +55,82 @@ check_os() {
     fi
     
     log_info "Detected OS: $PRETTY_NAME"
+}
+
+check_fresh_server() {
+    log_info "Checking if server is fresh..."
+    
+    local is_fresh=true
+    local warnings=()
+    
+    # Check for existing web servers
+    if systemctl is-active --quiet nginx 2>/dev/null || systemctl is-active --quiet apache2 2>/dev/null; then
+        warnings+=("Web server (Nginx/Apache) is already running")
+        is_fresh=false
+    fi
+    
+    # Check for existing MySQL/MariaDB with databases
+    if command -v mysql &> /dev/null; then
+        if systemctl is-active --quiet mysql 2>/dev/null || systemctl is-active --quiet mariadb 2>/dev/null; then
+            # Check if there are any databases (excluding system databases)
+            db_count=$(mysql -e "SHOW DATABASES;" 2>/dev/null | grep -v -E "^(Database|information_schema|performance_schema|mysql|sys)$" | wc -l)
+            if [ "$db_count" -gt 0 ]; then
+                warnings+=("MySQL/MariaDB is running with existing databases")
+                is_fresh=false
+            fi
+        fi
+    fi
+    
+    # Check for existing websites in /var/www
+    if [ -d "/var/www" ]; then
+        # Count non-empty directories (potential websites)
+        website_count=$(find /var/www -mindepth 1 -maxdepth 1 -type d ! -empty 2>/dev/null | wc -l)
+        if [ "$website_count" -gt 0 ]; then
+            warnings+=("Existing websites found in /var/www")
+            is_fresh=false
+        fi
+    fi
+    
+    # Check for existing Python web applications
+    if systemctl list-units --type=service --state=running | grep -qiE "(gunicorn|uwsgi|django|flask)"; then
+        warnings+=("Existing Python web applications detected")
+        is_fresh=false
+    fi
+    
+    # Check for existing SkyDock Panel installation or incomplete directory
+    if [ -d "$SKYDOCK_HOME" ]; then
+        if [ -f "$SKYDOCK_HOME/backend/manage.py" ]; then
+            warnings+=("SkyDock Panel appears to be already installed at $SKYDOCK_HOME")
+            is_fresh=false
+        else
+            warnings+=("Directory $SKYDOCK_HOME exists but is not a valid SkyDock Panel installation")
+            warnings+=("Please remove it manually: rm -rf $SKYDOCK_HOME")
+            is_fresh=false
+        fi
+    fi
+    
+    if [ "$is_fresh" = false ]; then
+        log_error "=========================================="
+        log_error "ERROR: Server is not fresh!"
+        log_error "=========================================="
+        log_error ""
+        log_error "This installer is designed for FRESH Ubuntu servers only."
+        log_error "The following issues were detected:"
+        log_error ""
+        for warning in "${warnings[@]}"; do
+            log_error "  - $warning"
+        done
+        log_error ""
+        log_error "For safety reasons, installation cannot proceed on a server"
+        log_error "with existing web services or applications."
+        log_error ""
+        log_error "Please use a fresh Ubuntu server, or manually install SkyDock Panel"
+        log_error "by following the manual installation guide."
+        log_error ""
+        exit 1
+    fi
+    
+    log_info "Server appears to be fresh. Proceeding with installation..."
 }
 
 install_dependencies() {
@@ -96,34 +173,89 @@ create_skydock_user() {
 clone_repository() {
     log_info "Cloning SkyDock Panel repository..."
     
+    # Try SSH first, fallback to HTTPS if SSH fails
+    local clone_url="$REPO_URL"
+    
     if [ -d "$SKYDOCK_HOME" ]; then
-        # Check if it's a git repository
-        if [ -d "$SKYDOCK_HOME/.git" ]; then
+        # Check if it's a valid git repository with proper structure
+        if [ -d "$SKYDOCK_HOME/.git" ] && [ -d "$SKYDOCK_HOME/backend" ]; then
             log_warn "Directory $SKYDOCK_HOME already exists. Updating..."
-            cd "$SKYDOCK_HOME"
-            git pull origin "$BRANCH" || log_warn "Could not update repository"
+            cd "$SKYDOCK_HOME" || {
+                log_error "Failed to change to $SKYDOCK_HOME"
+                exit 1
+            }
+            git pull origin "$BRANCH" || {
+                log_warn "Could not update repository, but continuing with existing installation..."
+                return 0
+            }
+            log_info "Repository updated"
         else
-            log_warn "Directory $SKYDOCK_HOME exists but is not a git repository."
+            log_warn "Directory $SKYDOCK_HOME exists but is not a valid SkyDock Panel installation."
             log_warn "Backing up and removing existing directory..."
             BACKUP_DIR="${SKYDOCK_HOME}.backup.$(date +%s)"
-            mv "$SKYDOCK_HOME" "$BACKUP_DIR"
-            log_info "Backed up to $BACKUP_DIR"
-            git clone -b "$BRANCH" "$REPO_URL" "$SKYDOCK_HOME"
-            log_info "Repository cloned"
+            if mv "$SKYDOCK_HOME" "$BACKUP_DIR" 2>/dev/null; then
+                log_info "Backed up to $BACKUP_DIR"
+            else
+                log_error "Failed to backup existing directory. Please remove it manually:"
+                log_error "  rm -rf $SKYDOCK_HOME"
+                exit 1
+            fi
+            
+            # Try SSH clone first
+            log_info "Attempting to clone via SSH..."
+            if git clone -b "$BRANCH" "$REPO_URL" "$SKYDOCK_HOME" 2>/dev/null; then
+                log_info "Repository cloned via SSH"
+            else
+                log_warn "SSH clone failed, trying HTTPS..."
+                if git clone -b "$BRANCH" "$REPO_URL_HTTPS" "$SKYDOCK_HOME"; then
+                    log_info "Repository cloned via HTTPS"
+                else
+                    log_error "Failed to clone repository. Please check:"
+                    log_error "  1. Repository URL is correct"
+                    log_error "  2. Branch exists: $BRANCH"
+                    log_error "  3. You have internet connectivity"
+                    log_error "  4. SSH keys are set up (for SSH) or repository is public (for HTTPS)"
+                    exit 1
+                fi
+            fi
         fi
     else
-        git clone -b "$BRANCH" "$REPO_URL" "$SKYDOCK_HOME"
-        log_info "Repository cloned"
+        # Try SSH clone first
+        log_info "Attempting to clone via SSH..."
+        if git clone -b "$BRANCH" "$REPO_URL" "$SKYDOCK_HOME" 2>/dev/null; then
+            log_info "Repository cloned via SSH"
+        else
+            log_warn "SSH clone failed, trying HTTPS..."
+            if git clone -b "$BRANCH" "$REPO_URL_HTTPS" "$SKYDOCK_HOME"; then
+                log_info "Repository cloned via HTTPS"
+            else
+                log_error "Failed to clone repository. Please check:"
+                log_error "  1. Repository URL is correct"
+                log_error "  2. Branch exists: $BRANCH"
+                log_error "  3. You have internet connectivity"
+                log_error "  4. SSH keys are set up (for SSH) or repository is public (for HTTPS)"
+                exit 1
+            fi
+        fi
     fi
     
     # Verify the backend directory exists
     if [ ! -d "$SKYDOCK_HOME/backend" ]; then
         log_error "Repository structure is invalid. Backend directory not found."
         log_error "Please ensure the repository contains the correct structure."
+        log_error "Expected: $SKYDOCK_HOME/backend/"
+        exit 1
+    fi
+    
+    # Verify manage.py exists
+    if [ ! -f "$SKYDOCK_HOME/backend/manage.py" ]; then
+        log_error "Repository structure is invalid. manage.py not found."
+        log_error "Please ensure the repository contains the correct Django structure."
         exit 1
     fi
     
     chown -R "$SKYDOCK_USER:$SKYDOCK_USER" "$SKYDOCK_HOME"
+    log_info "Repository setup complete"
 }
 
 setup_python_venv() {
@@ -327,6 +459,7 @@ main() {
     
     check_root
     check_os
+    check_fresh_server
     install_dependencies
     create_skydock_user
     clone_repository

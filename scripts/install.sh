@@ -383,7 +383,23 @@ install_dependencies() {
         fi
     fi
     
-    # Start services - test Apache config first
+    # Ensure Apache log directory exists
+    log_info "Ensuring Apache log directory exists..."
+    if [ ! -d /var/log/apache2 ]; then
+        mkdir -p /var/log/apache2
+        chown -R www-data:www-data /var/log/apache2 2>/dev/null || chown -R root:root /var/log/apache2
+        chmod 755 /var/log/apache2
+        log_info "Created Apache log directory"
+    fi
+    
+    # Add ServerName to apache2.conf if not present
+    if ! grep -q "^ServerName" /etc/apache2/apache2.conf 2>/dev/null; then
+        echo "ServerName localhost" >> /etc/apache2/apache2.conf
+        log_info "Added ServerName to Apache configuration"
+    fi
+    
+    # Final Apache config test and start
+    log_info "Final Apache configuration test..."
     if apache2ctl configtest >/dev/null 2>&1; then
         systemctl start nginx
         if systemctl start apache2; then
@@ -391,10 +407,15 @@ install_dependencies() {
         else
             log_error "Failed to start Apache. Check configuration with: apache2ctl configtest"
             log_error "View errors with: journalctl -xeu apache2.service"
+            # Try to diagnose the issue
+            config_error=$(apache2ctl configtest 2>&1)
+            log_error "Apache config error: $config_error"
             # Continue installation but Apache won't be running
         fi
     else
+        config_error=$(apache2ctl configtest 2>&1)
         log_error "Apache configuration is invalid. Cannot start Apache."
+        log_error "Config test output: $config_error"
         log_error "Run 'apache2ctl configtest' to see errors."
         # Start Nginx anyway
         systemctl start nginx

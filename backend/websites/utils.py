@@ -880,97 +880,92 @@ def fix_apache_ports_conf() -> bool:
     """Ensure Apache ports.conf is valid with Listen 8080."""
     try:
         ports_conf_path = '/etc/apache2/ports.conf'
+        import tempfile
+        import re
         
         # Read current ports.conf
         exit_code, stdout, stderr = run_command(['cat', ports_conf_path], sudo=True)
         if exit_code != 0:
-            logger.error(f"Failed to read ports.conf: {stderr}")
-            # Create a minimal valid ports.conf
-            content = "# SkyDock Panel - Apache Ports Configuration\nListen 8080\n"
+            logger.warning(f"Failed to read ports.conf: {stderr}, creating new one")
+            content = ""
         else:
             content = stdout
         
-        # Check if Listen 8080 exists (exact match on its own line)
-        import re
-        has_listen_8080 = bool(re.search(r'^[[:space:]]*Listen[[:space:]]+8080[[:space:]]*$', content, re.MULTILINE))
+        # Check if Listen 8080 exists (exact match on its own line, case-insensitive)
+        has_listen_8080 = bool(re.search(r'^[[:space:]]*[Ll]isten[[:space:]]+8080[[:space:]]*$', content, re.MULTILINE))
         
-        if not has_listen_8080:
-            # Remove any malformed Listen lines and add proper one
-            import tempfile
-            
-            # Remove lines that might be malformed (Listen without proper format)
-            lines = content.split('\n')
+        if not has_listen_8080 or not content.strip():
+            # Build a clean ports.conf
             fixed_lines = []
-            listen_8080_exists = False
             
-            for line in lines:
-                stripped = line.strip()
-                # Skip malformed Listen lines (like "Listen 8080Listen 80")
-                if re.match(r'^Listen\s+8080', stripped):
-                    if not listen_8080_exists:
-                        fixed_lines.append('Listen 8080')
-                        listen_8080_exists = True
-                elif re.match(r'^Listen\s+80\s*$', stripped):
-                    # Comment out Listen 80 instead of removing
-                    fixed_lines.append('#Listen 80  # Commented out by SkyDock Panel')
-                elif 'Listen 8080' in line and 'Listen 80' in line:
-                    # Skip malformed combined lines
-                    if not listen_8080_exists:
-                        fixed_lines.append('Listen 8080')
-                        listen_8080_exists = True
-                elif re.match(r'^Listen\s+443', stripped):
-                    # Keep Listen 443 if it exists
-                    fixed_lines.append(line)
-                else:
+            # Add header comment
+            fixed_lines.append("# SkyDock Panel - Apache Ports Configuration")
+            fixed_lines.append("# If you just change the port or add more ports here, you will likely also")
+            fixed_lines.append("# have to change the VirtualHost statement in")
+            fixed_lines.append("# /etc/apache2/sites-enabled/000-default.conf")
+            fixed_lines.append("")
+            
+            # Process existing content to preserve comments and other directives
+            if content.strip():
+                lines = content.split('\n')
+                for line in lines:
+                    stripped = line.strip()
+                    # Skip all Listen directives (we'll add our own)
+                    if re.match(r'^[Ll]isten\s+', stripped):
+                        continue
+                    # Keep everything else (comments, other directives)
                     fixed_lines.append(line)
             
-            # Add Listen 8080 if it doesn't exist
-            if not listen_8080_exists:
-                # Find a good place to insert it (after comments, before other Listen directives)
-                insert_pos = 0
-                for i, line in enumerate(fixed_lines):
-                    if line.strip().startswith('Listen'):
-                        insert_pos = i
-                        break
-                    if line.strip() and not line.strip().startswith('#'):
-                        insert_pos = i + 1
-                
-                fixed_lines.insert(insert_pos, 'Listen 8080')
-            
-            # Ensure we have at least a minimal valid config
-            if not any('Listen' in line for line in fixed_lines if not line.strip().startswith('#')):
-                fixed_lines.insert(0, '# SkyDock Panel - Apache Ports Configuration')
-                fixed_lines.insert(1, 'Listen 8080')
+            # Add Listen 8080 (required for SkyDock Panel)
+            fixed_lines.append("")
+            fixed_lines.append("# SkyDock Panel: Apache listens on port 8080 (Nginx proxies to this)")
+            fixed_lines.append("Listen 8080")
             
             # Write fixed content to temp file
-            with tempfile.NamedTemporaryFile(mode='w', delete=False) as tmp_file:
+            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.conf') as tmp_file:
                 tmp_file.write('\n'.join(fixed_lines))
                 tmp_file_path = tmp_file.name
             
             try:
+                # Backup original if it exists and has content
+                if content.strip():
+                    exit_code, _, _ = run_command(['cp', ports_conf_path, f'{ports_conf_path}.bak.skydock'], sudo=True)
+                
                 # Copy to destination with sudo
                 exit_code, stdout, stderr = run_command([
                     'cp', tmp_file_path, ports_conf_path
                 ], sudo=True)
                 
                 if exit_code != 0:
-                    logger.error(f"Failed to fix ports.conf: {stderr}")
+                    logger.error(f"Failed to write ports.conf: {stderr}")
                     return False
                 
+                # Set proper permissions
                 run_command(['chmod', '644', ports_conf_path], sudo=True)
                 logger.info("Fixed Apache ports.conf - added Listen 8080")
+                
+                # Verify the config is valid
+                exit_code, stdout, stderr = run_command(['apache2ctl', 'configtest'], sudo=True)
+                if exit_code != 0:
+                    logger.error(f"Apache config test failed after fix: {stdout + stderr}")
+                    # Restore backup if available
+                    if content.strip():
+                        run_command(['cp', f'{ports_conf_path}.bak.skydock', ports_conf_path], sudo=True)
+                    return False
+                
                 return True
             finally:
                 try:
                     os.unlink(tmp_file_path)
                 except:
                     pass
-        
-        # Verify the config is valid
-        exit_code, stdout, stderr = run_command(['apache2ctl', 'configtest'], sudo=True)
-        if exit_code != 0:
-            logger.warning(f"Apache config test failed after fix: {stdout + stderr}")
-            return False
+        else:
+            # Listen 8080 exists, but verify config is still valid
+            exit_code, stdout, stderr = run_command(['apache2ctl', 'configtest'], sudo=True)
+            if exit_code != 0:
+                logger.warning(f"Apache config test failed even though Listen 8080 exists: {stdout + stderr}")
+                # Try to fix it anyway
+                return fix_apache_ports_conf()  # Recursive call to rebuild
         
         return True
     except Exception as e:
@@ -1060,13 +1055,28 @@ def ensure_apache_log_dirs() -> bool:
                 logger.error(f"Failed to create log directory {log_dir}: {stderr}")
                 return False
         
-        # Set proper permissions
-        run_command(['chown', '-R', 'www-data:www-data', log_dir], sudo=True)
+        # Set proper ownership (www-data or root, depending on system)
+        # Try www-data first, fallback to root
+        exit_code, _, _ = run_command(['id', 'www-data'], sudo=False)
+        if exit_code == 0:
+            run_command(['chown', '-R', 'www-data:www-data', log_dir], sudo=True)
+        else:
+            # www-data doesn't exist, use root
+            run_command(['chown', '-R', 'root:root', log_dir], sudo=True)
+        
+        # Set permissions - Apache needs write access
         run_command(['chmod', '755', log_dir], sudo=True)
         
+        # Ensure Apache can write to the directory
+        # Check if apache2 user exists
+        exit_code, _, _ = run_command(['id', 'apache2'], sudo=False)
+        if exit_code == 0:
+            run_command(['chown', '-R', 'apache2:apache2', log_dir], sudo=True)
+        
+        logger.info(f"Apache log directory {log_dir} is ready")
         return True
     except Exception as e:
-        logger.error(f"Error ensuring Apache log directories: {e}")
+        logger.error(f"Error ensuring Apache log directories: {e}", exc_info=True)
         return False
 
 

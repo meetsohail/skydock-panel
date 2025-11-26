@@ -97,12 +97,30 @@ clone_repository() {
     log_info "Cloning SkyDock Panel repository..."
     
     if [ -d "$SKYDOCK_HOME" ]; then
-        log_warn "Directory $SKYDOCK_HOME already exists. Updating..."
-        cd "$SKYDOCK_HOME"
-        git pull origin "$BRANCH" || log_warn "Could not update repository"
+        # Check if it's a git repository
+        if [ -d "$SKYDOCK_HOME/.git" ]; then
+            log_warn "Directory $SKYDOCK_HOME already exists. Updating..."
+            cd "$SKYDOCK_HOME"
+            git pull origin "$BRANCH" || log_warn "Could not update repository"
+        else
+            log_warn "Directory $SKYDOCK_HOME exists but is not a git repository."
+            log_warn "Backing up and removing existing directory..."
+            BACKUP_DIR="${SKYDOCK_HOME}.backup.$(date +%s)"
+            mv "$SKYDOCK_HOME" "$BACKUP_DIR"
+            log_info "Backed up to $BACKUP_DIR"
+            git clone -b "$BRANCH" "$REPO_URL" "$SKYDOCK_HOME"
+            log_info "Repository cloned"
+        fi
     else
         git clone -b "$BRANCH" "$REPO_URL" "$SKYDOCK_HOME"
         log_info "Repository cloned"
+    fi
+    
+    # Verify the backend directory exists
+    if [ ! -d "$SKYDOCK_HOME/backend" ]; then
+        log_error "Repository structure is invalid. Backend directory not found."
+        log_error "Please ensure the repository contains the correct structure."
+        exit 1
     fi
     
     chown -R "$SKYDOCK_USER:$SKYDOCK_USER" "$SKYDOCK_HOME"
@@ -111,7 +129,17 @@ clone_repository() {
 setup_python_venv() {
     log_info "Setting up Python virtual environment..."
     
-    cd "$SKYDOCK_HOME/backend"
+    # Verify backend directory exists
+    if [ ! -d "$SKYDOCK_HOME/backend" ]; then
+        log_error "Backend directory not found at $SKYDOCK_HOME/backend"
+        log_error "Please ensure the repository was cloned correctly."
+        exit 1
+    fi
+    
+    cd "$SKYDOCK_HOME/backend" || {
+        log_error "Failed to change to backend directory"
+        exit 1
+    }
     
     if [ -d "venv" ]; then
         log_warn "Virtual environment already exists"
@@ -121,6 +149,12 @@ setup_python_venv() {
     fi
     
     source venv/bin/activate
+    
+    # Check if requirements.txt exists
+    if [ ! -f "requirements.txt" ]; then
+        log_error "requirements.txt not found in backend directory"
+        exit 1
+    fi
     
     log_info "Installing Python dependencies..."
     pip install --upgrade pip
@@ -132,7 +166,11 @@ setup_python_venv() {
 setup_django() {
     log_info "Setting up Django..."
     
-    cd "$SKYDOCK_HOME/backend"
+    cd "$SKYDOCK_HOME/backend" || {
+        log_error "Failed to change to backend directory"
+        exit 1
+    }
+    
     source venv/bin/activate
     
     # Create .env file if it doesn't exist

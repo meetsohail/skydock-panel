@@ -23,9 +23,10 @@ def websites_list(request):
     
     elif request.method == 'POST':
         # Create new website for the current user
-        domain = request.data.get('domain')
+        domain = request.data.get('domain', '').strip()
         website_type = request.data.get('type', Website.TYPE_PHP)
-        web_server = request.data.get('web_server', Website.WEB_SERVER_NGINX)
+        # Always use nginx as reverse proxy to apache
+        web_server = Website.WEB_SERVER_NGINX
         php_version = request.data.get('php_version', '8.1')
         
         if not domain:
@@ -34,11 +35,24 @@ def websites_list(request):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
+        # Validate domain format
+        import re
+        domain_regex = re.compile(r'^([a-z0-9]+(-[a-z0-9]+)*\.)+[a-z]{2,}$', re.IGNORECASE)
+        if not domain_regex.match(domain):
+            return Response(
+                {'error': 'Invalid domain format. Please enter a valid domain name (e.g., example.com)'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
         # For WordPress, require admin credentials
+        wp_email = None
+        wp_username = None
+        wp_password = None
+        
         if website_type == Website.TYPE_WORDPRESS:
-            wp_email = request.data.get('wp_email')
-            wp_username = request.data.get('wp_username')
-            wp_password = request.data.get('wp_password')
+            wp_email = request.data.get('wp_email', '').strip()
+            wp_username = request.data.get('wp_username', '').strip()
+            wp_password = request.data.get('wp_password', '').strip()
             
             if not wp_email or not wp_username or not wp_password:
                 return Response(
@@ -62,9 +76,12 @@ def websites_list(request):
             domain=domain,
             root_path=root_path,
             type=website_type,
-            web_server=web_server,
+            web_server=web_server,  # Always nginx (as reverse proxy)
             php_version=php_version,
-            status=Website.STATUS_ACTIVE
+            status=Website.STATUS_ACTIVE,
+            wp_admin_email=wp_email if website_type == Website.TYPE_WORDPRESS else None,
+            wp_admin_user=wp_username if website_type == Website.TYPE_WORDPRESS else None,
+            wp_admin_password=wp_password if website_type == Website.TYPE_WORDPRESS else None,
         )
         
         # Create the actual site

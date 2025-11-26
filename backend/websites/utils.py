@@ -28,28 +28,78 @@ def create_directory(path: str, owner_user: Optional[str] = None) -> bool:
         owner_user: Username to set as owner (defaults to www-data for web server access)
     """
     try:
-        os.makedirs(path, exist_ok=True)
+        # Ensure web root exists first
+        web_root = settings.SKYDOCK_WEB_ROOT
+        if not os.path.exists(web_root):
+            logger.info(f"Creating web root directory: {web_root}")
+            exit_code, stdout, stderr = run_command(['mkdir', '-p', web_root], sudo=True)
+            if exit_code != 0:
+                logger.error(f"Failed to create web root {web_root}: {stderr}")
+                return False
+            # Set web root permissions
+            run_command(['chown', '-R', 'www-data:www-data', web_root], sudo=True)
+            run_command(['chmod', '755', web_root], sudo=True)
+        
+        # Create parent directories if they don't exist
+        parent_dir = os.path.dirname(path)
+        if parent_dir and parent_dir != path and not os.path.exists(parent_dir):
+            logger.info(f"Creating parent directory: {parent_dir}")
+            # Try to create parent directory with sudo
+            exit_code, stdout, stderr = run_command(['mkdir', '-p', parent_dir], sudo=True)
+            if exit_code != 0:
+                logger.error(f"Failed to create parent directory {parent_dir}: {stderr}")
+                return False
+        
+        # Create the directory itself with sudo
+        if not os.path.exists(path):
+            logger.info(f"Creating directory: {path}")
+            exit_code, stdout, stderr = run_command(['mkdir', '-p', path], sudo=True)
+            if exit_code != 0:
+                logger.error(f"Failed to create directory {path}: {stderr}")
+                return False
+        else:
+            logger.info(f"Directory already exists: {path}")
         
         # Set ownership - prefer owner_user if provided, otherwise use www-data
         if owner_user:
             # Set owner to the user, group to www-data for web server access
-            exit_code, _, _ = run_command(['chown', '-R', f'{owner_user}:www-data', path], sudo=True)
+            exit_code, stdout, stderr = run_command(['chown', '-R', f'{owner_user}:www-data', path], sudo=True)
             if exit_code != 0:
+                logger.warning(f"Failed to chown to {owner_user}:www-data: {stderr}, trying {owner_user}:{owner_user}")
                 # Fallback to user:user if www-data group doesn't exist
-                run_command(['chown', '-R', f'{owner_user}:{owner_user}', path], sudo=True)
+                exit_code, stdout, stderr = run_command(['chown', '-R', f'{owner_user}:{owner_user}', path], sudo=True)
+                if exit_code != 0:
+                    logger.error(f"Failed to chown directory {path} to {owner_user}: {stderr}")
+                    # Don't fail completely - try www-data as fallback
+                    run_command(['chown', '-R', 'www-data:www-data', path], sudo=True)
         else:
             # Default: www-data ownership for web server
-            exit_code, _, _ = run_command(['chown', '-R', 'www-data:www-data', path], sudo=True)
+            exit_code, stdout, stderr = run_command(['chown', '-R', 'www-data:www-data', path], sudo=True)
             if exit_code != 0:
+                logger.warning(f"Failed to chown to www-data:www-data: {stderr}")
                 # Try with current user if www-data doesn't exist
                 import getpass
                 current_user = getpass.getuser()
-                run_command(['chown', '-R', f'{current_user}:{current_user}', path], sudo=True)
+                exit_code, stdout, stderr = run_command(['chown', '-R', f'{current_user}:{current_user}', path], sudo=True)
+                if exit_code != 0:
+                    logger.warning(f"Failed to chown directory {path}: {stderr}, but continuing")
         
-        run_command(['chmod', '-R', '755', path], sudo=True)
+        # Set permissions
+        exit_code, stdout, stderr = run_command(['chmod', '-R', '755', path], sudo=True)
+        if exit_code != 0:
+            logger.warning(f"Failed to chmod directory {path}: {stderr}, but continuing")
+            # Don't fail on chmod errors, as ownership might be sufficient
+        
+        logger.info(f"Successfully created and configured directory: {path}")
         return True
+    except PermissionError as e:
+        logger.error(f"Permission denied creating directory {path}: {e}")
+        return False
+    except OSError as e:
+        logger.error(f"OS error creating directory {path}: {e}")
+        return False
     except Exception as e:
-        logger.error(f"Error creating directory {path}: {e}")
+        logger.error(f"Error creating directory {path}: {e}", exc_info=True)
         return False
 
 

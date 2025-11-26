@@ -225,18 +225,16 @@ clone_repository() {
     if check_skydock_installed; then
         log_info "SkyDock Panel is already installed. Updating code..."
         
-        cd "$SKYDOCK_HOME" || {
-            log_error "Failed to change to $SKYDOCK_HOME"
-            exit 1
-        }
-        
         # Check if it's a git repository
-        if [ -d ".git" ]; then
+        if [ -d "$SKYDOCK_HOME/.git" ]; then
+            # Run git commands as the skydock user to avoid ownership issues
+            log_info "Updating repository as $SKYDOCK_USER user..."
+            
             # Stash any local changes
-            git stash > /dev/null 2>&1 || true
+            sudo -u "$SKYDOCK_USER" -H bash -c "cd '$SKYDOCK_HOME' && git stash > /dev/null 2>&1 || true"
             
             # Pull latest changes
-            if git pull origin "$BRANCH"; then
+            if sudo -u "$SKYDOCK_USER" -H bash -c "cd '$SKYDOCK_HOME' && git pull origin '$BRANCH'"; then
                 log_info "Repository updated successfully"
             else
                 log_error "Failed to update repository. Please check:"
